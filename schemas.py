@@ -1,0 +1,619 @@
+"""
+API Schemas for Tirumakudalu Properties
+Pydantic schemas for API request/response validation
+"""
+
+from typing import Optional, List
+from datetime import datetime
+from pydantic import BaseModel, Field, EmailStr, HttpUrl, field_serializer
+from models import (
+    PropertyType, PropertyStatus, InquiryStatus,
+    Property, PropertyImage, PropertyFeature,
+    Partner, Testimonial, ContactInquiry
+)
+
+
+# ============================================
+# COMMON SCHEMAS
+# ============================================
+
+class MessageResponse(BaseModel):
+    """Standard message response"""
+    message: str
+    success: bool = True
+
+
+class ErrorResponse(BaseModel):
+    """Error response schema"""
+    error: str
+    detail: Optional[str] = None
+    success: bool = False
+
+
+class PaginationParams(BaseModel):
+    """Pagination parameters"""
+    page: int = Field(1, ge=1, description="Page number")
+    limit: int = Field(10, ge=1, le=100, description="Items per page")
+
+
+class PaginatedResponse(BaseModel):
+    """Paginated response wrapper"""
+    total: int
+    page: int
+    limit: int
+    pages: int
+    items: List[dict]
+
+
+# ============================================
+# PROPERTY SCHEMAS
+# ============================================
+
+class PropertyCreateSchema(BaseModel):
+    """Schema for creating a property"""
+    title: str = Field(..., max_length=255)
+    location: str = Field(..., max_length=255)
+    price: float = Field(..., gt=0)
+    price_text: Optional[str] = Field(None, max_length=500, description="Original price text (e.g., '3BHK: Rs.3.32 Cr, 4BHK: Rs.3.72 Cr')")
+    type: PropertyType
+    bedrooms: int = Field(..., gt=0)
+    bathrooms: float = Field(..., gt=0)
+    area: int = Field(..., gt=0, description="Area in square feet")
+    status: PropertyStatus
+    description: Optional[str] = None
+    is_featured: bool = False
+    is_active: bool = True
+    images: Optional[List[str]] = Field(default=[], description="List of image URLs")
+    features: Optional[List[str]] = Field(default=[], description="List of feature names")
+
+
+class PropertyUpdateSchema(BaseModel):
+    """Schema for updating a property"""
+    title: Optional[str] = Field(None, max_length=255)
+    location: Optional[str] = Field(None, max_length=255)
+    price: Optional[float] = Field(None, gt=0)
+    price_text: Optional[str] = Field(None, max_length=500, description="Original price text (e.g., '3BHK: Rs.3.32 Cr, 4BHK: Rs.3.72 Cr')")
+    type: Optional[PropertyType] = None
+    bedrooms: Optional[int] = Field(None, gt=0)
+    bathrooms: Optional[float] = Field(None, gt=0)
+    area: Optional[int] = Field(None, gt=0)
+    status: Optional[PropertyStatus] = None
+    description: Optional[str] = None
+    is_featured: Optional[bool] = None
+    is_active: Optional[bool] = None
+    images: Optional[List[str]] = None
+    features: Optional[List[str]] = None
+
+
+class PropertyImageSchema(BaseModel):
+    """Property image schema for responses"""
+    id: int
+    image_url: str
+    image_order: int
+    is_primary: bool
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+class PropertyFeatureSchema(BaseModel):
+    """Property feature schema for responses"""
+    id: int
+    feature_name: str
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+class PropertyResponseSchema(BaseModel):
+    """Property response schema with related data"""
+    id: int
+    title: str
+    location: str
+    price: float
+    price_text: Optional[str] = None
+    type: PropertyType
+    bedrooms: int
+    bathrooms: float
+    area: int
+    status: PropertyStatus
+    description: Optional[str]
+    is_featured: bool
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    images: List[PropertyImageSchema] = []
+    features: List[PropertyFeatureSchema] = []
+    # Additional optional fields that may exist in database
+    builder: Optional[str] = None
+    configuration: Optional[str] = None
+    plot_area: Optional[str] = None
+    super_built_up_area: Optional[str] = None
+    total_flats: Optional[str] = None
+    total_floors: Optional[str] = None
+    total_acres: Optional[str] = None
+    property_status: Optional[str] = None  # Alternative status field
+
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+class PropertyListResponseSchema(BaseModel):
+    """Property list response schema (simplified)"""
+    id: int
+    title: str
+    location: str
+    price: float
+    price_text: Optional[str] = None
+    type: PropertyType
+    bedrooms: int
+    bathrooms: float
+    area: int
+    status: PropertyStatus
+    is_featured: bool
+    primary_image: Optional[str] = None
+    created_at: datetime
+    # Additional optional fields that may exist in database
+    builder: Optional[str] = None
+    configuration: Optional[str] = None
+    plot_area: Optional[str] = None
+    super_built_up_area: Optional[str] = None
+    total_flats: Optional[str] = None
+    total_floors: Optional[str] = None
+    total_acres: Optional[str] = None
+    property_status: Optional[str] = None  # Alternative status field
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+class PropertyFilterSchema(BaseModel):
+    """Schema for property filtering"""
+    type: Optional[PropertyType] = None
+    status: Optional[PropertyStatus] = None
+    min_price: Optional[float] = Field(None, ge=0)
+    max_price: Optional[float] = Field(None, ge=0)
+    min_bedrooms: Optional[int] = Field(None, ge=0)
+    max_bedrooms: Optional[int] = Field(None, ge=0)
+    min_area: Optional[int] = Field(None, ge=0)
+    max_area: Optional[int] = Field(None, ge=0)
+    location: Optional[str] = None
+    is_featured: Optional[bool] = None
+    is_active: Optional[bool] = True
+
+
+# ============================================
+# PARTNER SCHEMAS
+# ============================================
+
+class PartnerCreateSchema(BaseModel):
+    """Schema for creating a partner"""
+    name: str = Field(..., max_length=255)
+    logo_url: Optional[str] = None  # Removed max_length to allow base64 images (will be converted to file)
+    website_url: Optional[HttpUrl] = None
+    is_active: bool = True
+    display_order: int = 0
+
+
+class PartnerUpdateSchema(BaseModel):
+    """Schema for updating a partner"""
+    name: Optional[str] = Field(None, max_length=255)
+    logo_url: Optional[str] = None  # Removed max_length to allow base64 images (will be converted to file)
+    website_url: Optional[HttpUrl] = None
+    is_active: Optional[bool] = None
+    display_order: Optional[int] = None
+
+
+class PartnerResponseSchema(BaseModel):
+    """Partner response schema"""
+    id: int
+    name: str
+    logo_url: Optional[str]
+    website_url: Optional[str]
+    description: Optional[str]
+    is_active: bool
+    display_order: int
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+# ============================================
+# TESTIMONIAL SCHEMAS
+# ============================================
+
+class TestimonialCreateSchema(BaseModel):
+    """Schema for creating a testimonial"""
+    client_name: str = Field(..., max_length=255)
+    client_email: Optional[EmailStr] = None
+    client_phone: Optional[str] = Field(None, max_length=20)
+    service_type: Optional[str] = Field(None, max_length=100)
+    rating: Optional[int] = Field(None, ge=1, le=5)
+    message: str
+    is_approved: bool = False
+    is_featured: bool = False
+
+
+class TestimonialUpdateSchema(BaseModel):
+    """Schema for updating a testimonial"""
+    client_name: Optional[str] = Field(None, max_length=255)
+    client_email: Optional[EmailStr] = None
+    client_phone: Optional[str] = Field(None, max_length=20)
+    service_type: Optional[str] = Field(None, max_length=100)
+    rating: Optional[int] = Field(None, ge=1, le=5)
+    message: Optional[str] = None
+    is_approved: Optional[bool] = None
+    is_featured: Optional[bool] = None
+
+
+class TestimonialResponseSchema(BaseModel):
+    """Testimonial response schema"""
+    id: int
+    client_name: str
+    client_email: Optional[str]
+    client_phone: Optional[str]
+    service_type: Optional[str]
+    rating: Optional[int]
+    message: str
+    is_approved: bool
+    is_featured: bool
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+class TestimonialPublicSchema(BaseModel):
+    """Public testimonial schema (only approved)"""
+    id: int
+    client_name: str
+    service_type: Optional[str]
+    rating: Optional[int]
+    message: str
+    is_featured: bool
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+# ============================================
+# CONTACT INQUIRY SCHEMAS
+# ============================================
+
+class ContactInquiryCreateSchema(BaseModel):
+    """Schema for creating a contact inquiry"""
+    name: str = Field(..., max_length=255)
+    email: EmailStr
+    subject: Optional[str] = Field(None, max_length=255)
+    message: str
+    phone: Optional[str] = Field(None, max_length=20)
+    property_id: Optional[int] = None
+    # Note: ip_address is captured server-side, not from client input
+
+
+class ContactInquiryUpdateSchema(BaseModel):
+    """Schema for updating a contact inquiry"""
+    name: Optional[str] = Field(None, max_length=255)
+    email: Optional[EmailStr] = None
+    subject: Optional[str] = Field(None, max_length=255)
+    message: Optional[str] = None
+    phone: Optional[str] = Field(None, max_length=20)
+    property_id: Optional[int] = None
+    status: Optional[InquiryStatus] = None
+    ip_address: Optional[str] = Field(None, max_length=45)
+
+
+class ContactInquiryResponseSchema(BaseModel):
+    """Contact inquiry response schema"""
+    id: int
+    name: str
+    email: str
+    subject: Optional[str]
+    message: str
+    phone: Optional[str]
+    property_id: Optional[int]
+    status: InquiryStatus
+    ip_address: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+# ============================================
+# STATISTICS SCHEMAS
+# ============================================
+
+class PropertyStatsSchema(BaseModel):
+    """Property statistics schema"""
+    total: int
+    for_sale: int
+    for_rent: int
+    by_type: dict
+    featured: int
+
+
+class DashboardStatsSchema(BaseModel):
+    """Dashboard statistics schema"""
+    total_properties: int
+    active_properties: int
+    featured_properties: int
+    total_partners: int
+    active_partners: int
+    total_testimonials: int
+    approved_testimonials: int
+    new_inquiries: int
+    total_inquiries: int
+    total_logs: int
+    properties_by_type: dict
+    properties_by_status: dict
+
+
+class FrontendStatsSchema(BaseModel):
+    """Frontend statistics schema for homepage"""
+    properties_listed: int
+    happy_clients: int
+    years_experience: int
+    deals_closed: int
+
+
+# ============================================
+# AUTHENTICATION SCHEMAS
+# ============================================
+
+class LoginSchema(BaseModel):
+    """Login request schema"""
+    email: EmailStr
+    password: str
+
+
+class LoginResponseSchema(BaseModel):
+    """Login response schema"""
+    success: bool
+    message: str
+    token: Optional[str] = None
+    user: Optional[dict] = None
+
+
+class TokenData(BaseModel):
+    """Token data schema"""
+    user_id: int
+    email: str
+    role: str
+
+
+# ============================================
+# VISITOR INFO SCHEMAS
+# ============================================
+
+class VisitorInfoCreateSchema(BaseModel):
+    """Schema for creating visitor info from popup modal"""
+    full_name: str = Field(..., max_length=255)
+    email: EmailStr
+    phone: str = Field(..., max_length=20)
+    looking_for: Optional[str] = None
+
+
+class VisitorInfoResponseSchema(BaseModel):
+    """Visitor info response schema"""
+    id: int
+    full_name: str
+    email: str
+    phone: str
+    looking_for: Optional[str]
+    ip_address: Optional[str] = Field(None, max_length=45)
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+# ============================================
+# LOG SCHEMAS
+# ============================================
+
+class LogCreateSchema(BaseModel):
+    """Schema for creating a log entry"""
+    log_type: str = Field(..., max_length=50, description="Type of log (info, warning, error, action)")
+    action: str = Field(..., max_length=100, description="Action performed")
+    description: Optional[str] = None
+    user_email: Optional[str] = Field(None, max_length=255)
+    ip_address: Optional[str] = Field(None, max_length=45)
+    user_agent: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+class LogResponseSchema(BaseModel):
+    """Log response schema"""
+    id: int
+    log_type: str
+    action: str
+    description: Optional[str]
+    user_email: Optional[str]
+    ip_address: Optional[str]
+    user_agent: Optional[str]
+    metadata: Optional[dict]
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+# ============================================
+# SEARCH SCHEMAS
+# ============================================
+
+class SearchQuerySchema(BaseModel):
+    """Search query schema"""
+    query: Optional[str] = None
+    filters: Optional[PropertyFilterSchema] = None
+    pagination: Optional[PaginationParams] = None
+    sort_by: Optional[str] = Field(None, description="Sort field (price, created_at, etc.)")
+    sort_order: Optional[str] = Field(None, pattern="^(asc|desc)$", description="Sort order")
+
+
+class SearchResponseSchema(BaseModel):
+    """Search response schema"""
+    total: int
+    page: int
+    limit: int
+    pages: int
+    results: List[PropertyListResponseSchema]
+
+
+# ============================================
+# BLOG SCHEMAS
+# ============================================
+
+class BlogCreateSchema(BaseModel):
+    """Schema for creating a blog"""
+    title: str = Field(..., max_length=255)
+    excerpt: Optional[str] = None
+    content: str
+    category: Optional[str] = Field(None, max_length=100)
+    tags: Optional[List[str]] = Field(default=[], description="List of tags")
+    image_url: Optional[str] = None
+    author: Optional[str] = Field(None, max_length=255)
+    views: int = 0
+    is_featured: bool = False
+    is_active: bool = True
+
+
+class BlogUpdateSchema(BaseModel):
+    """Schema for updating a blog"""
+    title: Optional[str] = Field(None, max_length=255)
+    excerpt: Optional[str] = None
+    content: Optional[str] = None
+    category: Optional[str] = Field(None, max_length=100)
+    tags: Optional[List[str]] = None
+    image_url: Optional[str] = None
+    author: Optional[str] = Field(None, max_length=255)
+    views: Optional[int] = None
+    is_featured: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+class BlogResponseSchema(BaseModel):
+    """Blog response schema"""
+    id: int
+    title: str
+    excerpt: Optional[str]
+    content: Optional[str]
+    category: Optional[str]
+    tags: Optional[List[str]]
+    image_url: Optional[str]
+    author: Optional[str]
+    views: int
+    is_featured: bool
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+# ============================================
+# SYSTEM METRICS SCHEMAS
+# ============================================
+
+class SystemMetricsCreateSchema(BaseModel):
+    """Schema for creating a system metrics entry"""
+    cpu_usage: float = Field(..., ge=0, le=100, description="CPU usage percentage")
+    ram_usage: float = Field(..., ge=0, le=100, description="RAM usage percentage")
+    ram_used_mb: float = Field(..., ge=0, description="RAM used in MB")
+    ram_total_mb: float = Field(..., ge=0, description="Total RAM in MB")
+    bandwidth_in_mb: float = Field(0, ge=0, description="Bandwidth in (MB)")
+    bandwidth_out_mb: float = Field(0, ge=0, description="Bandwidth out (MB)")
+    bandwidth_total_mb: float = Field(0, ge=0, description="Total bandwidth (MB)")
+
+
+class SystemMetricsResponseSchema(BaseModel):
+    """System metrics response schema"""
+    id: int
+    cpu_usage: float
+    ram_usage: float
+    ram_used_mb: float
+    ram_total_mb: float
+    bandwidth_in_mb: float
+    bandwidth_out_mb: float
+    bandwidth_total_mb: float
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+class SystemMetricsListResponseSchema(BaseModel):
+    """System metrics list response schema"""
+    success: bool
+    metrics: List[SystemMetricsResponseSchema]
+    message: Optional[str] = None
+

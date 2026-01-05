@@ -1,0 +1,41 @@
+# ============================================
+# PYTHON DEPENDENCIES
+# ============================================
+# All packages are compatible with Python 3.11+
+# Tested and verified for Python 3.11.x
+
+# Web Framework
+# Flask - WSGI-compatible framework for cPanel Passenger
+flask>=3.0.0,<4.0.0
+# Flask-CORS for cross-origin requests
+flask-cors>=4.0.0,<5.0.0
+
+# Data Validation
+# Pydantic 2.x - Fully compatible with Python 3.11
+pydantic>=2.9.0,<3.0.0
+pydantic[email]>=2.9.0,<3.0.0
+
+# Database ORM and Connection
+# SQLAlchemy 2.0.x - Supports Python 3.11
+sqlalchemy>=2.0.23,<3.0.0
+# PyMySQL for MySQL connections - Compatible with Python 3.11
+pymysql>=1.1.0,<2.0.0
+# Cryptography for secure connections - Compatible with Python 3.11
+cryptography>=41.0.0,<44.0.0
+
+# Authentication
+# Passlib for password hashing - Compatible with Python 3.11
+passlib[bcrypt]>=1.7.4,<2.0.0
+# Bcrypt for password hashing - Compatible with Python 3.11
+bcrypt>=4.0.0,<5.0.0
+
+# Email
+# SMTP is handled via standard smtplib (built-in, no extra package needed)
+
+# Environment Variables
+# Python-dotenv for .env file support - Compatible with Python 3.11
+python-dotenv>=1.0.0,<2.0.0
+
+# System Monitoring
+# psutil for system metrics (CPU, RAM, etc.) - Compatible with Python 3.11
+psutil>=5.9.0,<6.0.0
