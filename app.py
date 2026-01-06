@@ -794,8 +794,32 @@ def login():
         if login_data.email.lower() != allowed_admin_email.lower():
             abort_with_message(401, "Invalid email or password")
         
-        user_query = "SELECT * FROM users WHERE email = %s AND is_active = 1"
-        users = execute_query(user_query, (login_data.email,))
+        # Test database connection before querying
+        connection_test = test_connection()
+        if not connection_test.get("connected", False):
+            error_msg = connection_test.get("error", "Unknown database connection error")
+            print(f"Database connection test failed during login: {error_msg}")
+            print(f"Connection details: {connection_test.get('details', {})}")
+            suggestion = connection_test.get("suggestion", "Please check database configuration in cPanel.")
+            abort_with_message(500, f"Database connection failed: {error_msg}. {suggestion}")
+        
+        # Query user from database
+        try:
+            user_query = "SELECT * FROM users WHERE email = %s AND is_active = 1"
+            users = execute_query(user_query, (login_data.email,))
+        except Exception as db_error:
+            error_msg = str(db_error)
+            print(f"Database query error during login: {error_msg}")
+            traceback.print_exc()
+            # Provide specific error messages for common database issues
+            if "Access denied" in error_msg or "(1045" in error_msg:
+                abort_with_message(500, "Database authentication failed. Please verify DB_USER and DB_PASSWORD in cPanel environment variables.")
+            elif "Can't connect" in error_msg or "Connection refused" in error_msg:
+                abort_with_message(500, "Cannot connect to database server. Please verify DB_HOST in cPanel environment variables.")
+            elif "Unknown database" in error_msg:
+                abort_with_message(500, "Database not found. Please verify DB_NAME in cPanel environment variables.")
+            else:
+                abort_with_message(500, f"Database error during login: {error_msg}")
         
         if not users or len(users) == 0:
             abort_with_message(401, "Invalid email or password")
@@ -805,8 +829,14 @@ def login():
         if not verify_password(login_data.password, user['password_hash']):
             abort_with_message(401, "Invalid email or password")
         
-        update_query = "UPDATE users SET last_login = %s WHERE id = %s"
-        execute_update(update_query, (datetime.now(), user['id']))
+        # Update last login timestamp
+        try:
+            update_query = "UPDATE users SET last_login = %s WHERE id = %s"
+            execute_update(update_query, (datetime.now(), user['id']))
+        except Exception as update_error:
+            # Log error but don't fail login if update fails
+            print(f"Warning: Failed to update last_login timestamp: {str(update_error)}")
+            # Continue with login even if timestamp update fails
         
         response_data = LoginResponseSchema(
             success=True,
