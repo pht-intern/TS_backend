@@ -775,7 +775,17 @@ def login():
         if not data:
             abort_with_message(400, "Invalid request data")
         
-        login_data = LoginSchema(**data)
+        try:
+            login_data = LoginSchema(**data)
+        except Exception as validation_error:
+            # Handle Pydantic validation errors
+            error_msg = str(validation_error)
+            if "email" in error_msg.lower():
+                abort_with_message(400, "Invalid email format")
+            elif "password" in error_msg.lower():
+                abort_with_message(400, "Password is required")
+            else:
+                abort_with_message(400, f"Invalid request data: {error_msg}")
         
         allowed_admin_email = os.getenv("ADMIN_EMAIL")
         if not allowed_admin_email:
@@ -809,7 +819,7 @@ def login():
                 "role": user.get('role', 'admin')
             }
         )
-        return jsonify(response_data.dict())
+        return jsonify(response_data.model_dump())
     except RuntimeError as e:
         # Database connection errors
         error_msg = str(e)
