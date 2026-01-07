@@ -9,7 +9,12 @@ from pydantic import BaseModel, Field, EmailStr, HttpUrl, field_serializer
 from models import (
     PropertyType, PropertyStatus, InquiryStatus,
     Property, PropertyImage, PropertyFeature,
-    Partner, Testimonial, ContactInquiry
+    PropertyProjectImage, PropertyFloorplanImage, PropertyMasterplanImage,
+    Partner, Testimonial, ContactInquiry,
+    Blog, User, UserRole,
+    VisitorInfo, Log, LogType,
+    SystemMetrics, TemporaryMetrics,
+    CacheLog, CacheOperation, CacheStatus
 )
 
 
@@ -63,6 +68,10 @@ class PropertyCreateSchema(BaseModel):
     description: Optional[str] = None
     is_featured: bool = False
     is_active: bool = True
+    location_link: Optional[str] = Field(None, description="Google Maps location link")
+    directions: Optional[str] = Field(None, description="Directions to the property")
+    length: Optional[float] = Field(None, ge=0, description="Property length in feet (for residential properties)")
+    breadth: Optional[float] = Field(None, ge=0, description="Property breadth in feet (for residential properties)")
     images: Optional[List[str]] = Field(default=[], description="List of image URLs")
     features: Optional[List[str]] = Field(default=[], description="List of feature names")
 
@@ -81,6 +90,10 @@ class PropertyUpdateSchema(BaseModel):
     description: Optional[str] = None
     is_featured: Optional[bool] = None
     is_active: Optional[bool] = None
+    location_link: Optional[str] = Field(None, description="Google Maps location link")
+    directions: Optional[str] = Field(None, description="Directions to the property")
+    length: Optional[float] = Field(None, ge=0, description="Property length in feet (for residential properties)")
+    breadth: Optional[float] = Field(None, ge=0, description="Property breadth in feet (for residential properties)")
     images: Optional[List[str]] = None
     features: Optional[List[str]] = None
 
@@ -91,6 +104,57 @@ class PropertyImageSchema(BaseModel):
     image_url: str
     image_order: int
     is_primary: bool
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+class PropertyProjectImageSchema(BaseModel):
+    """Property project image schema for responses"""
+    id: int
+    property_id: int
+    image_url: str
+    image_order: int
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+class PropertyFloorplanImageSchema(BaseModel):
+    """Property floorplan image schema for responses"""
+    id: int
+    property_id: int
+    image_url: str
+    image_order: int
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+class PropertyMasterplanImageSchema(BaseModel):
+    """Property masterplan image schema for responses"""
+    id: int
+    property_id: int
+    image_url: str
+    image_order: int
     created_at: datetime
 
     @field_serializer('created_at')
@@ -132,9 +196,16 @@ class PropertyResponseSchema(BaseModel):
     description: Optional[str]
     is_featured: bool
     is_active: bool
+    location_link: Optional[str] = None
+    directions: Optional[str] = None
+    length: Optional[float] = None
+    breadth: Optional[float] = None
     created_at: datetime
     updated_at: datetime
     images: List[PropertyImageSchema] = []
+    project_images: List[PropertyProjectImageSchema] = []
+    floorplan_images: List[PropertyFloorplanImageSchema] = []
+    masterplan_images: List[PropertyMasterplanImageSchema] = []
     features: List[PropertyFeatureSchema] = []
     # Additional optional fields that may exist in database
     builder: Optional[str] = None
@@ -168,6 +239,8 @@ class PropertyListResponseSchema(BaseModel):
     area: int
     status: PropertyStatus
     is_featured: bool
+    location_link: Optional[str] = None
+    directions: Optional[str] = None
     primary_image: Optional[str] = None
     created_at: datetime
     # Additional optional fields that may exist in database
@@ -430,6 +503,48 @@ class TokenData(BaseModel):
 
 
 # ============================================
+# USER SCHEMAS
+# ============================================
+
+class UserCreateSchema(BaseModel):
+    """Schema for creating a user"""
+    email: EmailStr
+    password: str = Field(..., min_length=6, description="Password (will be hashed)")
+    full_name: Optional[str] = Field(None, max_length=255)
+    role: UserRole = UserRole.ADMIN
+    is_active: bool = True
+
+
+class UserUpdateSchema(BaseModel):
+    """Schema for updating a user"""
+    email: Optional[EmailStr] = None
+    password: Optional[str] = Field(None, min_length=6, description="New password (will be hashed)")
+    full_name: Optional[str] = Field(None, max_length=255)
+    role: Optional[UserRole] = None
+    is_active: Optional[bool] = None
+
+
+class UserResponseSchema(BaseModel):
+    """User response schema"""
+    id: int
+    email: str
+    full_name: Optional[str]
+    role: UserRole
+    is_active: bool
+    last_login: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer('created_at', 'updated_at', 'last_login')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+# ============================================
 # VISITOR INFO SCHEMAS
 # ============================================
 
@@ -617,3 +732,109 @@ class SystemMetricsListResponseSchema(BaseModel):
     metrics: List[SystemMetricsResponseSchema]
     message: Optional[str] = None
 
+
+# ============================================
+# TEMPORARY METRICS SCHEMAS
+# ============================================
+
+class TemporaryMetricsCreateSchema(BaseModel):
+    """Schema for creating a temporary metrics entry (for stat cards auto-refresh)"""
+    cpu_usage: float = Field(..., ge=0, le=100, description="CPU usage percentage")
+    ram_usage: float = Field(..., ge=0, le=100, description="RAM usage percentage")
+    ram_used_mb: float = Field(..., ge=0, description="RAM used in MB")
+    ram_total_mb: float = Field(..., ge=0, description="Total RAM in MB")
+    bandwidth_in_mb: float = Field(0, ge=0, description="Bandwidth in (MB)")
+    bandwidth_out_mb: float = Field(0, ge=0, description="Bandwidth out (MB)")
+    bandwidth_total_mb: float = Field(0, ge=0, description="Total bandwidth (MB)")
+
+
+class TemporaryMetricsResponseSchema(BaseModel):
+    """Temporary metrics response schema (for stat cards)"""
+    id: int
+    cpu_usage: float
+    ram_usage: float
+    ram_used_mb: float
+    ram_total_mb: float
+    bandwidth_in_mb: float
+    bandwidth_out_mb: float
+    bandwidth_total_mb: float
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+class TemporaryMetricsCurrentResponseSchema(BaseModel):
+    """Current temporary metrics response schema (latest entry for stat cards)"""
+    success: bool
+    metrics: Optional[TemporaryMetricsResponseSchema] = None
+    message: Optional[str] = None
+
+
+# ============================================
+# CACHE LOG SCHEMAS
+# ============================================
+
+class CacheLogCreateSchema(BaseModel):
+    """Schema for creating a cache log entry"""
+    cache_key: str = Field(..., max_length=500, description="Cache key that was accessed")
+    operation: CacheOperation = Field(..., description="Cache operation: hit, miss, set, delete, clear")
+    cache_type: Optional[str] = Field(None, max_length=50, description="Type of cache: property, partner, testimonial, etc.")
+    response_time_ms: Optional[float] = Field(None, ge=0, description="Response time in milliseconds")
+    cache_size_kb: Optional[float] = Field(None, ge=0, description="Size of cached data in KB")
+    status: CacheStatus = Field(CacheStatus.SUCCESS, description="Operation status: success, error")
+    error_message: Optional[str] = Field(None, description="Error message if operation failed")
+    ip_address: Optional[str] = Field(None, max_length=45, description="IP address of the request")
+    user_agent: Optional[str] = Field(None, description="User agent of the request")
+    metadata: Optional[dict] = Field(None, description="Additional metadata about the cache operation")
+
+
+class CacheLogResponseSchema(BaseModel):
+    """Cache log response schema"""
+    id: int
+    cache_key: str
+    operation: CacheOperation
+    cache_type: Optional[str] = None
+    response_time_ms: Optional[float] = None
+    cache_size_kb: Optional[float] = None
+    status: CacheStatus
+    error_message: Optional[str] = None
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    metadata: Optional[dict] = None
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+class CacheLogListResponseSchema(BaseModel):
+    """Cache log list response schema with pagination"""
+    success: bool
+    logs: List[CacheLogResponseSchema] = []
+    total: int = 0
+    page: int = 1
+    limit: int = 50
+    pages: int = 0
+    has_more: bool = False
+    message: Optional[str] = None
+
+
+class CacheLogFilterSchema(BaseModel):
+    """Schema for filtering cache logs"""
+    operation: Optional[CacheOperation] = None
+    status: Optional[CacheStatus] = None
+    cache_type: Optional[str] = None
+    search: Optional[str] = None
+    page: int = Field(1, ge=1, description="Page number")
+    limit: int = Field(50, ge=1, le=500, description="Items per page")

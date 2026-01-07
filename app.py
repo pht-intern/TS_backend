@@ -66,7 +66,11 @@ from schemas import (
     # Blogs
     BlogCreateSchema, BlogUpdateSchema, BlogResponseSchema,
     # System Metrics
-    SystemMetricsCreateSchema, SystemMetricsResponseSchema, SystemMetricsListResponseSchema
+    SystemMetricsCreateSchema, SystemMetricsResponseSchema, SystemMetricsListResponseSchema,
+    # Temporary Metrics
+    TemporaryMetricsCreateSchema, TemporaryMetricsResponseSchema, TemporaryMetricsCurrentResponseSchema,
+    # Cache Logs
+    CacheLogCreateSchema, CacheLogResponseSchema, CacheLogListResponseSchema, CacheLogFilterSchema
 )
 from models import PropertyType, PropertyStatus, InquiryStatus
 from passlib.context import CryptContext
@@ -480,8 +484,8 @@ def setup_admin_user():
         except Exception as e:
             print(f"Note: Blogs table creation: {str(e)}")
         
-        # Create system_metrics table
-        create_metrics_table_query = """
+        # Create system_metrics table (permanent storage for graphs)
+        create_system_metrics_table_query = """
             CREATE TABLE IF NOT EXISTS system_metrics (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 cpu_usage DECIMAL(5, 2) NOT NULL COMMENT 'CPU usage percentage',
@@ -497,10 +501,32 @@ def setup_admin_user():
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """
         try:
-            execute_update(create_metrics_table_query)
+            execute_update(create_system_metrics_table_query)
             print("✓ System metrics table created/verified")
         except Exception as e:
             print(f"Note: System metrics table creation: {str(e)}")
+        
+        # Create temporary_metrics table (temporary storage for stat cards)
+        create_temp_metrics_table_query = """
+            CREATE TABLE IF NOT EXISTS temporary_metrics (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                cpu_usage DECIMAL(5, 2) NOT NULL COMMENT 'CPU usage percentage',
+                ram_usage DECIMAL(5, 2) NOT NULL COMMENT 'RAM usage percentage',
+                ram_used_mb DECIMAL(10, 2) NOT NULL COMMENT 'RAM used in MB',
+                ram_total_mb DECIMAL(10, 2) NOT NULL COMMENT 'Total RAM in MB',
+                bandwidth_in_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Bandwidth in (MB)',
+                bandwidth_out_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Bandwidth out (MB)',
+                bandwidth_total_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Total bandwidth (MB)',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_created_at (created_at),
+                INDEX idx_created_at_desc (created_at DESC)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+        try:
+            execute_update(create_temp_metrics_table_query)
+            print("✓ Temporary metrics table created/verified")
+        except Exception as e:
+            print(f"Note: Temporary metrics table creation: {str(e)}")
         
         # Get admin credentials from environment
         email = os.getenv("ADMIN_EMAIL")
@@ -1113,12 +1139,57 @@ def get_properties():
         if query_time > 1.0:  # Log slow queries (> 1 second)
             print(f"[PERF] Slow query detected: {query_time:.2f}s for page {pagination.page}, limit {pagination.limit}")
         
-        # Normalize image URLs
+        # Fetch primary images for each property and normalize image URLs
         normalized_properties = []
         for prop in properties:
             prop_dict = dict(prop)
+            property_id = prop_dict.get('id')
+            property_category = prop_dict.get('property_category', 'residential')
+            
+            # Determine which image table to use
+            image_table = 'residential_property_images' if property_category == 'residential' else 'plot_property_images'
+            
+            # Fetch primary image from the image table
+            if property_id:
+                try:
+                    primary_image_query = f"""
+                        SELECT image_url 
+                        FROM {image_table} 
+                        WHERE property_id = %s 
+                        ORDER BY is_primary DESC, image_order ASC, created_at ASC 
+                        LIMIT 1
+                    """
+                    primary_images = execute_query(primary_image_query, (property_id,))
+                    if primary_images and primary_images[0].get('image_url'):
+                        prop_dict['primary_image'] = normalize_image_url(primary_images[0]['image_url'])
+                    
+                    # Also fetch all images for the property
+                    all_images_query = f"""
+                        SELECT image_url 
+                        FROM {image_table} 
+                        WHERE property_id = %s 
+                        ORDER BY is_primary DESC, image_order ASC, created_at ASC
+                    """
+                    all_images = execute_query(all_images_query, (property_id,))
+                    if all_images:
+                        prop_dict['images'] = [
+                            {'image_url': normalize_image_url(img['image_url'])} 
+                            for img in all_images 
+                            if img.get('image_url')
+                        ]
+                except Exception as e:
+                    # If image fetch fails, continue without images
+                    print(f"Warning: Could not fetch images for property {property_id}: {str(e)}")
+                    prop_dict['images'] = []
+            
+            # Normalize existing primary_image if it exists (fallback - in case property table has primary_image field)
             if 'primary_image' in prop_dict and prop_dict['primary_image']:
                 prop_dict['primary_image'] = normalize_image_url(prop_dict['primary_image'])
+            
+            # Ensure images array exists
+            if 'images' not in prop_dict:
+                prop_dict['images'] = []
+            
             normalized_properties.append(prop_dict)
         
         response = PaginatedResponse(
@@ -2786,10 +2857,10 @@ def after_request(response):
 @app.route("/api/admin/metrics/collect", methods=["POST"])
 @require_admin_auth
 def collect_metrics():
-    """Collect and store system metrics"""
+    """Collect and store system metrics in both permanent and temporary tables"""
     try:
-        # Create table if it doesn't exist
-        create_table_query = """
+        # Create system_metrics table if it doesn't exist (permanent storage for graphs)
+        create_system_table_query = """
             CREATE TABLE IF NOT EXISTS system_metrics (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 cpu_usage DECIMAL(5, 2) NOT NULL COMMENT 'CPU usage percentage',
@@ -2805,43 +2876,139 @@ def collect_metrics():
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """
         try:
-            execute_update(create_table_query)
+            execute_update(create_system_table_query)
         except Exception as table_error:
             print(f"Warning: Could not create system_metrics table: {str(table_error)}")
+            traceback.print_exc()
             # Continue anyway - table might already exist
         
-        # Get CPU usage
-        cpu_percent = psutil.cpu_percent(interval=1)
+        # Create temporary_metrics table if it doesn't exist (temporary storage for stat cards)
+        create_temp_table_query = """
+            CREATE TABLE IF NOT EXISTS temporary_metrics (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                cpu_usage DECIMAL(5, 2) NOT NULL COMMENT 'CPU usage percentage',
+                ram_usage DECIMAL(5, 2) NOT NULL COMMENT 'RAM usage percentage',
+                ram_used_mb DECIMAL(10, 2) NOT NULL COMMENT 'RAM used in MB',
+                ram_total_mb DECIMAL(10, 2) NOT NULL COMMENT 'Total RAM in MB',
+                bandwidth_in_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Bandwidth in (MB)',
+                bandwidth_out_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Bandwidth out (MB)',
+                bandwidth_total_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Total bandwidth (MB)',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_created_at (created_at),
+                INDEX idx_created_at_desc (created_at DESC)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+        try:
+            execute_update(create_temp_table_query)
+        except Exception as table_error:
+            print(f"Warning: Could not create temporary_metrics table: {str(table_error)}")
+            traceback.print_exc()
+            # Continue anyway - table might already exist
         
-        # Get RAM usage
-        memory = psutil.virtual_memory()
-        ram_percent = memory.percent
-        ram_used_mb = memory.used / (1024 * 1024)
-        ram_total_mb = memory.total / (1024 * 1024)
+        # Initialize default values
+        cpu_percent = 0.0
+        ram_percent = 0.0
+        ram_used_mb = 0.0
+        ram_total_mb = 0.0
+        
+        # Try to get CPU and RAM usage with psutil
+        # Handle cases where psutil is not available or fails
+        try:
+            # Check if psutil is available
+            if psutil is None:
+                raise ImportError("psutil module is not available")
+            
+            # Get CPU usage - use non-blocking call first, then blocking if needed
+            try:
+                # Try non-blocking first (returns immediately with last value)
+                cpu_percent = psutil.cpu_percent(interval=None)
+                if cpu_percent is None or cpu_percent == 0:
+                    # If None or 0, try with a short interval
+                    cpu_percent = psutil.cpu_percent(interval=0.1)
+            except Exception as cpu_error:
+                print(f"Warning: Could not get CPU usage: {str(cpu_error)}")
+                cpu_percent = 0.0
+            
+            # Get RAM usage
+            try:
+                memory = psutil.virtual_memory()
+                ram_percent = memory.percent
+                ram_used_mb = memory.used / (1024 * 1024)
+                ram_total_mb = memory.total / (1024 * 1024)
+            except Exception as ram_error:
+                print(f"Warning: Could not get RAM usage: {str(ram_error)}")
+                ram_percent = 0.0
+                ram_used_mb = 0.0
+                ram_total_mb = 0.0
+                
+        except ImportError as import_error:
+            error_msg = f"psutil module not available: {str(import_error)}. Please install psutil: pip install psutil"
+            print(f"Error: {error_msg}")
+            traceback.print_exc()
+            return jsonify({
+                "success": False,
+                "error": "System metrics collection unavailable. psutil module is not installed. Please install it: pip install psutil",
+                "details": str(import_error)
+            }), 500
+        except Exception as psutil_error:
+            error_msg = f"Error accessing system resources: {str(psutil_error)}"
+            print(f"Warning: {error_msg}")
+            traceback.print_exc()
+            # Continue with default values (0.0) - don't fail the request
         
         # Get bandwidth for this application
-        with _bandwidth_lock:
-            bandwidth_in = _app_bandwidth_in
-            bandwidth_out = _app_bandwidth_out
-            bandwidth_total = bandwidth_in + bandwidth_out
-            # Reset counters after reading
-            _app_bandwidth_in = 0
-            _app_bandwidth_out = 0
+        try:
+            with _bandwidth_lock:
+                bandwidth_in = _app_bandwidth_in
+                bandwidth_out = _app_bandwidth_out
+                bandwidth_total = bandwidth_in + bandwidth_out
+                # Reset counters after reading
+                _app_bandwidth_in = 0
+                _app_bandwidth_out = 0
+        except Exception as bandwidth_error:
+            print(f"Warning: Could not get bandwidth metrics: {str(bandwidth_error)}")
+            bandwidth_in = 0.0
+            bandwidth_out = 0.0
+            bandwidth_total = 0.0
         
-        # Store metrics in database
-        insert_query = """
-            INSERT INTO system_metrics 
-            (cpu_usage, ram_usage, ram_used_mb, ram_total_mb, 
-             bandwidth_in_mb, bandwidth_out_mb, bandwidth_total_mb)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """
-        execute_update(
-            insert_query,
-            (cpu_percent, ram_percent, ram_used_mb, ram_total_mb,
-             bandwidth_in, bandwidth_out, bandwidth_total)
-        )
+        # Store metrics in both tables (permanent and temporary)
+        try:
+            # Insert into system_metrics (permanent storage for graphs)
+            insert_system_query = """
+                INSERT INTO system_metrics 
+                (cpu_usage, ram_usage, ram_used_mb, ram_total_mb, 
+                 bandwidth_in_mb, bandwidth_out_mb, bandwidth_total_mb)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """
+            execute_update(
+                insert_system_query,
+                (cpu_percent, ram_percent, ram_used_mb, ram_total_mb,
+                 bandwidth_in, bandwidth_out, bandwidth_total)
+            )
+            
+            # Insert into temporary_metrics (temporary storage for stat cards)
+            insert_temp_query = """
+                INSERT INTO temporary_metrics 
+                (cpu_usage, ram_usage, ram_used_mb, ram_total_mb, 
+                 bandwidth_in_mb, bandwidth_out_mb, bandwidth_total_mb)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """
+            execute_update(
+                insert_temp_query,
+                (cpu_percent, ram_percent, ram_used_mb, ram_total_mb,
+                 bandwidth_in, bandwidth_out, bandwidth_total)
+            )
+        except Exception as db_error:
+            error_msg = f"Database error storing metrics: {str(db_error)}"
+            print(f"Error: {error_msg}")
+            traceback.print_exc()
+            return jsonify({
+                "success": False,
+                "error": "Failed to store metrics in database",
+                "details": str(db_error)
+            }), 500
         
-        # Keep only last 1000 records (cleanup old data)
+        # Cleanup old data from system_metrics (keep only last 1000 records)
         # Use a more compatible approach for MySQL
         try:
             # Count total records
@@ -2870,7 +3037,22 @@ def collect_metrics():
                         """
                         execute_update(cleanup_query, tuple(keep_id_list))
         except Exception as e:
-            print(f"Error cleaning up old metrics: {e}")
+            print(f"Error cleaning up old system_metrics: {e}")
+            traceback.print_exc()
+            # Don't fail the whole request if cleanup fails
+        
+        # Cleanup old data from temporary_metrics (keep only last 5 minutes)
+        try:
+            cleanup_temp_query = """
+                DELETE FROM temporary_metrics 
+                WHERE created_at < DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+            """
+            deleted_count = execute_update(cleanup_temp_query)
+            if deleted_count > 0:
+                print(f"Cleaned up {deleted_count} old records from temporary_metrics")
+        except Exception as e:
+            print(f"Error cleaning up old temporary_metrics: {e}")
+            traceback.print_exc()
             # Don't fail the whole request if cleanup fails
         
         return jsonify({
@@ -2887,11 +3069,13 @@ def collect_metrics():
             }
         })
     except Exception as e:
-        print(f"Error collecting metrics: {str(e)}")
+        error_msg = f"Error collecting metrics: {str(e)}"
+        print(f"Error: {error_msg}")
         traceback.print_exc()
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "Failed to collect system metrics",
+            "details": str(e)
         }), 500
 
 @app.route("/api/admin/metrics", methods=["GET"])
@@ -2909,8 +3093,8 @@ def get_metrics():
         if limit < 1 or limit > 1000:
             limit = 100
         
-        # Create table if it doesn't exist
-        create_table_query = """
+        # Create system_metrics table if it doesn't exist (for graphs)
+        create_system_table_query = """
             CREATE TABLE IF NOT EXISTS system_metrics (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 cpu_usage DECIMAL(5, 2) NOT NULL COMMENT 'CPU usage percentage',
@@ -2926,9 +3110,30 @@ def get_metrics():
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """
         try:
-            execute_update(create_table_query)
+            execute_update(create_system_table_query)
         except Exception as table_error:
             print(f"Warning: Could not create system_metrics table: {str(table_error)}")
+        
+        # Create temporary_metrics table if it doesn't exist (for stat cards)
+        create_temp_table_query = """
+            CREATE TABLE IF NOT EXISTS temporary_metrics (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                cpu_usage DECIMAL(5, 2) NOT NULL COMMENT 'CPU usage percentage',
+                ram_usage DECIMAL(5, 2) NOT NULL COMMENT 'RAM usage percentage',
+                ram_used_mb DECIMAL(10, 2) NOT NULL COMMENT 'RAM used in MB',
+                ram_total_mb DECIMAL(10, 2) NOT NULL COMMENT 'Total RAM in MB',
+                bandwidth_in_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Bandwidth in (MB)',
+                bandwidth_out_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Bandwidth out (MB)',
+                bandwidth_total_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Total bandwidth (MB)',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_created_at (created_at),
+                INDEX idx_created_at_desc (created_at DESC)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+        try:
+            execute_update(create_temp_table_query)
+        except Exception as table_error:
+            print(f"Warning: Could not create temporary_metrics table: {str(table_error)}")
         
         query = """
             SELECT 
@@ -3011,35 +3216,107 @@ def get_metrics():
 @app.route("/api/admin/metrics/current", methods=["GET"])
 @require_admin_auth
 def get_current_metrics():
-    """Get current system metrics without storing"""
+    """Get current system metrics from temporary_metrics table (for stat cards auto-refresh)"""
     try:
-        # Get CPU usage
-        cpu_percent = psutil.cpu_percent(interval=0.1)
+        # Create temporary_metrics table if it doesn't exist
+        create_temp_table_query = """
+            CREATE TABLE IF NOT EXISTS temporary_metrics (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                cpu_usage DECIMAL(5, 2) NOT NULL COMMENT 'CPU usage percentage',
+                ram_usage DECIMAL(5, 2) NOT NULL COMMENT 'RAM usage percentage',
+                ram_used_mb DECIMAL(10, 2) NOT NULL COMMENT 'RAM used in MB',
+                ram_total_mb DECIMAL(10, 2) NOT NULL COMMENT 'Total RAM in MB',
+                bandwidth_in_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Bandwidth in (MB)',
+                bandwidth_out_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Bandwidth out (MB)',
+                bandwidth_total_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Total bandwidth (MB)',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_created_at (created_at),
+                INDEX idx_created_at_desc (created_at DESC)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+        try:
+            execute_update(create_temp_table_query)
+        except Exception as table_error:
+            print(f"Warning: Could not create temporary_metrics table: {str(table_error)}")
         
-        # Get RAM usage
-        memory = psutil.virtual_memory()
-        ram_percent = memory.percent
-        ram_used_mb = memory.used / (1024 * 1024)
-        ram_total_mb = memory.total / (1024 * 1024)
+        # Get the latest metrics from temporary_metrics table
+        query = """
+            SELECT 
+                cpu_usage,
+                ram_usage,
+                ram_used_mb,
+                ram_total_mb,
+                bandwidth_in_mb,
+                bandwidth_out_mb,
+                bandwidth_total_mb,
+                created_at
+            FROM temporary_metrics
+            ORDER BY created_at DESC
+            LIMIT 1
+        """
         
-        # Get bandwidth for this application
-        with _bandwidth_lock:
-            bandwidth_in = _app_bandwidth_in
-            bandwidth_out = _app_bandwidth_out
-            bandwidth_total = bandwidth_in + bandwidth_out
+        metrics_result = execute_query(query)
         
-        return jsonify({
-            "success": True,
-            "metrics": {
-                "cpu_usage": cpu_percent,
-                "ram_usage": ram_percent,
-                "ram_used_mb": round(ram_used_mb, 2),
-                "ram_total_mb": round(ram_total_mb, 2),
-                "bandwidth_in_mb": round(bandwidth_in, 2),
-                "bandwidth_out_mb": round(bandwidth_out, 2),
-                "bandwidth_total_mb": round(bandwidth_total, 2)
-            }
-        })
+        if metrics_result and len(metrics_result) > 0:
+            # Return the latest metrics from temporary_metrics
+            metric = metrics_result[0]
+            return jsonify({
+                "success": True,
+                "metrics": {
+                    "cpu_usage": float(metric.get('cpu_usage', 0)),
+                    "ram_usage": float(metric.get('ram_usage', 0)),
+                    "ram_used_mb": float(metric.get('ram_used_mb', 0)),
+                    "ram_total_mb": float(metric.get('ram_total_mb', 0)),
+                    "bandwidth_in_mb": float(metric.get('bandwidth_in_mb', 0)),
+                    "bandwidth_out_mb": float(metric.get('bandwidth_out_mb', 0)),
+                    "bandwidth_total_mb": float(metric.get('bandwidth_total_mb', 0)),
+                    "created_at": metric.get('created_at').isoformat() if metric.get('created_at') else None
+                }
+            })
+        else:
+            # Fallback: Get current metrics without storing (if no data in temporary_metrics)
+            try:
+                # Get CPU usage
+                cpu_percent = psutil.cpu_percent(interval=0.1) if psutil else 0.0
+                
+                # Get RAM usage
+                if psutil:
+                    memory = psutil.virtual_memory()
+                    ram_percent = memory.percent
+                    ram_used_mb = memory.used / (1024 * 1024)
+                    ram_total_mb = memory.total / (1024 * 1024)
+                else:
+                    ram_percent = 0.0
+                    ram_used_mb = 0.0
+                    ram_total_mb = 0.0
+                
+                # Get bandwidth for this application
+                with _bandwidth_lock:
+                    bandwidth_in = _app_bandwidth_in
+                    bandwidth_out = _app_bandwidth_out
+                    bandwidth_total = bandwidth_in + bandwidth_out
+                
+                return jsonify({
+                    "success": True,
+                    "metrics": {
+                        "cpu_usage": cpu_percent,
+                        "ram_usage": ram_percent,
+                        "ram_used_mb": round(ram_used_mb, 2),
+                        "ram_total_mb": round(ram_total_mb, 2),
+                        "bandwidth_in_mb": round(bandwidth_in, 2),
+                        "bandwidth_out_mb": round(bandwidth_out, 2),
+                        "bandwidth_total_mb": round(bandwidth_total, 2),
+                        "created_at": None
+                    },
+                    "message": "No metrics in temporary_metrics table yet. Using live system data."
+                })
+            except Exception as fallback_error:
+                print(f"Error in fallback metrics calculation: {str(fallback_error)}")
+                return jsonify({
+                    "success": False,
+                    "error": "No metrics available and cannot calculate live metrics",
+                    "details": str(fallback_error)
+                }), 500
     except Exception as e:
         print(f"Error getting current metrics: {str(e)}")
         traceback.print_exc()
@@ -4089,5 +4366,3 @@ application = app
 
 if __name__ == "__main__":
     app.run(debug=DEBUG_MODE, host="0.0.0.0", port=5000)
-
-
