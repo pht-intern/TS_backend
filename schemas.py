@@ -9,7 +9,11 @@ from pydantic import BaseModel, Field, EmailStr, HttpUrl, field_serializer
 from models import (
     PropertyType, PropertyStatus, InquiryStatus,
     Property, PropertyImage, PropertyFeature,
-    Partner, Testimonial, ContactInquiry
+    PropertyProjectImage, PropertyFloorplanImage, PropertyMasterplanImage,
+    Partner, Testimonial, ContactInquiry,
+    Blog, User, UserRole,
+    VisitorInfo, Log, LogType,
+    SystemMetrics
 )
 
 
@@ -63,6 +67,10 @@ class PropertyCreateSchema(BaseModel):
     description: Optional[str] = None
     is_featured: bool = False
     is_active: bool = True
+    location_link: Optional[str] = Field(None, description="Google Maps location link")
+    directions: Optional[str] = Field(None, description="Directions to the property")
+    length: Optional[float] = Field(None, ge=0, description="Property length in feet (for residential properties)")
+    breadth: Optional[float] = Field(None, ge=0, description="Property breadth in feet (for residential properties)")
     images: Optional[List[str]] = Field(default=[], description="List of image URLs")
     features: Optional[List[str]] = Field(default=[], description="List of feature names")
 
@@ -81,6 +89,10 @@ class PropertyUpdateSchema(BaseModel):
     description: Optional[str] = None
     is_featured: Optional[bool] = None
     is_active: Optional[bool] = None
+    location_link: Optional[str] = Field(None, description="Google Maps location link")
+    directions: Optional[str] = Field(None, description="Directions to the property")
+    length: Optional[float] = Field(None, ge=0, description="Property length in feet (for residential properties)")
+    breadth: Optional[float] = Field(None, ge=0, description="Property breadth in feet (for residential properties)")
     images: Optional[List[str]] = None
     features: Optional[List[str]] = None
 
@@ -91,6 +103,57 @@ class PropertyImageSchema(BaseModel):
     image_url: str
     image_order: int
     is_primary: bool
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+class PropertyProjectImageSchema(BaseModel):
+    """Property project image schema for responses"""
+    id: int
+    property_id: int
+    image_url: str
+    image_order: int
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+class PropertyFloorplanImageSchema(BaseModel):
+    """Property floorplan image schema for responses"""
+    id: int
+    property_id: int
+    image_url: str
+    image_order: int
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+class PropertyMasterplanImageSchema(BaseModel):
+    """Property masterplan image schema for responses"""
+    id: int
+    property_id: int
+    image_url: str
+    image_order: int
     created_at: datetime
 
     @field_serializer('created_at')
@@ -132,9 +195,16 @@ class PropertyResponseSchema(BaseModel):
     description: Optional[str]
     is_featured: bool
     is_active: bool
+    location_link: Optional[str] = None
+    directions: Optional[str] = None
+    length: Optional[float] = None
+    breadth: Optional[float] = None
     created_at: datetime
     updated_at: datetime
     images: List[PropertyImageSchema] = []
+    project_images: List[PropertyProjectImageSchema] = []
+    floorplan_images: List[PropertyFloorplanImageSchema] = []
+    masterplan_images: List[PropertyMasterplanImageSchema] = []
     features: List[PropertyFeatureSchema] = []
     # Additional optional fields that may exist in database
     builder: Optional[str] = None
@@ -168,6 +238,8 @@ class PropertyListResponseSchema(BaseModel):
     area: int
     status: PropertyStatus
     is_featured: bool
+    location_link: Optional[str] = None
+    directions: Optional[str] = None
     primary_image: Optional[str] = None
     created_at: datetime
     # Additional optional fields that may exist in database
@@ -427,6 +499,48 @@ class TokenData(BaseModel):
     user_id: int
     email: str
     role: str
+
+
+# ============================================
+# USER SCHEMAS
+# ============================================
+
+class UserCreateSchema(BaseModel):
+    """Schema for creating a user"""
+    email: EmailStr
+    password: str = Field(..., min_length=6, description="Password (will be hashed)")
+    full_name: Optional[str] = Field(None, max_length=255)
+    role: UserRole = UserRole.ADMIN
+    is_active: bool = True
+
+
+class UserUpdateSchema(BaseModel):
+    """Schema for updating a user"""
+    email: Optional[EmailStr] = None
+    password: Optional[str] = Field(None, min_length=6, description="New password (will be hashed)")
+    full_name: Optional[str] = Field(None, max_length=255)
+    role: Optional[UserRole] = None
+    is_active: Optional[bool] = None
+
+
+class UserResponseSchema(BaseModel):
+    """User response schema"""
+    id: int
+    email: str
+    full_name: Optional[str]
+    role: UserRole
+    is_active: bool
+    last_login: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer('created_at', 'updated_at', 'last_login')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
 
 
 # ============================================

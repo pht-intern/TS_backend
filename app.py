@@ -2808,38 +2808,97 @@ def collect_metrics():
             execute_update(create_table_query)
         except Exception as table_error:
             print(f"Warning: Could not create system_metrics table: {str(table_error)}")
+            traceback.print_exc()
             # Continue anyway - table might already exist
         
-        # Get CPU usage
-        cpu_percent = psutil.cpu_percent(interval=1)
+        # Initialize default values
+        cpu_percent = 0.0
+        ram_percent = 0.0
+        ram_used_mb = 0.0
+        ram_total_mb = 0.0
         
-        # Get RAM usage
-        memory = psutil.virtual_memory()
-        ram_percent = memory.percent
-        ram_used_mb = memory.used / (1024 * 1024)
-        ram_total_mb = memory.total / (1024 * 1024)
+        # Try to get CPU and RAM usage with psutil
+        # Handle cases where psutil is not available or fails
+        try:
+            # Check if psutil is available
+            if psutil is None:
+                raise ImportError("psutil module is not available")
+            
+            # Get CPU usage - use non-blocking call first, then blocking if needed
+            try:
+                # Try non-blocking first (returns immediately with last value)
+                cpu_percent = psutil.cpu_percent(interval=None)
+                if cpu_percent is None or cpu_percent == 0:
+                    # If None or 0, try with a short interval
+                    cpu_percent = psutil.cpu_percent(interval=0.1)
+            except Exception as cpu_error:
+                print(f"Warning: Could not get CPU usage: {str(cpu_error)}")
+                cpu_percent = 0.0
+            
+            # Get RAM usage
+            try:
+                memory = psutil.virtual_memory()
+                ram_percent = memory.percent
+                ram_used_mb = memory.used / (1024 * 1024)
+                ram_total_mb = memory.total / (1024 * 1024)
+            except Exception as ram_error:
+                print(f"Warning: Could not get RAM usage: {str(ram_error)}")
+                ram_percent = 0.0
+                ram_used_mb = 0.0
+                ram_total_mb = 0.0
+                
+        except ImportError as import_error:
+            error_msg = f"psutil module not available: {str(import_error)}. Please install psutil: pip install psutil"
+            print(f"Error: {error_msg}")
+            traceback.print_exc()
+            return jsonify({
+                "success": False,
+                "error": "System metrics collection unavailable. psutil module is not installed. Please install it: pip install psutil",
+                "details": str(import_error)
+            }), 500
+        except Exception as psutil_error:
+            error_msg = f"Error accessing system resources: {str(psutil_error)}"
+            print(f"Warning: {error_msg}")
+            traceback.print_exc()
+            # Continue with default values (0.0) - don't fail the request
         
         # Get bandwidth for this application
-        with _bandwidth_lock:
-            bandwidth_in = _app_bandwidth_in
-            bandwidth_out = _app_bandwidth_out
-            bandwidth_total = bandwidth_in + bandwidth_out
-            # Reset counters after reading
-            _app_bandwidth_in = 0
-            _app_bandwidth_out = 0
+        try:
+            with _bandwidth_lock:
+                bandwidth_in = _app_bandwidth_in
+                bandwidth_out = _app_bandwidth_out
+                bandwidth_total = bandwidth_in + bandwidth_out
+                # Reset counters after reading
+                _app_bandwidth_in = 0
+                _app_bandwidth_out = 0
+        except Exception as bandwidth_error:
+            print(f"Warning: Could not get bandwidth metrics: {str(bandwidth_error)}")
+            bandwidth_in = 0.0
+            bandwidth_out = 0.0
+            bandwidth_total = 0.0
         
         # Store metrics in database
-        insert_query = """
-            INSERT INTO system_metrics 
-            (cpu_usage, ram_usage, ram_used_mb, ram_total_mb, 
-             bandwidth_in_mb, bandwidth_out_mb, bandwidth_total_mb)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """
-        execute_update(
-            insert_query,
-            (cpu_percent, ram_percent, ram_used_mb, ram_total_mb,
-             bandwidth_in, bandwidth_out, bandwidth_total)
-        )
+        try:
+            insert_query = """
+                INSERT INTO system_metrics 
+                (cpu_usage, ram_usage, ram_used_mb, ram_total_mb, 
+                 bandwidth_in_mb, bandwidth_out_mb, bandwidth_total_mb)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """
+            execute_update(
+                insert_query,
+                (cpu_percent, ram_percent, ram_used_mb, ram_total_mb,
+                 bandwidth_in, bandwidth_out, bandwidth_total)
+            )
+        except Exception as db_error:
+            error_msg = f"Database error storing metrics: {str(db_error)}"
+            print(f"Error: {error_msg}")
+            traceback.print_exc()
+            return jsonify({
+                "success": False,
+                "error": "Failed to store metrics in database",
+                "details": str(db_error)
+            }), 500
         
         # Keep only last 1000 records (cleanup old data)
         # Use a more compatible approach for MySQL
@@ -2871,6 +2930,7 @@ def collect_metrics():
                         execute_update(cleanup_query, tuple(keep_id_list))
         except Exception as e:
             print(f"Error cleaning up old metrics: {e}")
+            traceback.print_exc()
             # Don't fail the whole request if cleanup fails
         
         return jsonify({
@@ -2887,11 +2947,13 @@ def collect_metrics():
             }
         })
     except Exception as e:
-        print(f"Error collecting metrics: {str(e)}")
+        error_msg = f"Error collecting metrics: {str(e)}"
+        print(f"Error: {error_msg}")
         traceback.print_exc()
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "Failed to collect system metrics",
+            "details": str(e)
         }), 500
 
 @app.route("/api/admin/metrics", methods=["GET"])

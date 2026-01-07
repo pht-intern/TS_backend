@@ -48,6 +48,10 @@ class PropertyBase(BaseModel):
     description: Optional[str] = None
     is_featured: bool = False
     is_active: bool = True
+    location_link: Optional[str] = Field(None, description="Google Maps location link")
+    directions: Optional[str] = Field(None, description="Directions to the property")
+    length: Optional[float] = Field(None, ge=0, description="Property length in feet (for residential properties)")
+    breadth: Optional[float] = Field(None, ge=0, description="Property breadth in feet (for residential properties)")
 
 
 class PropertyCreate(PropertyBase):
@@ -68,6 +72,10 @@ class PropertyUpdate(BaseModel):
     description: Optional[str] = None
     is_featured: Optional[bool] = None
     is_active: Optional[bool] = None
+    location_link: Optional[str] = Field(None, description="Google Maps location link")
+    directions: Optional[str] = Field(None, description="Directions to the property")
+    length: Optional[float] = Field(None, ge=0, description="Property length in feet (for residential properties)")
+    breadth: Optional[float] = Field(None, ge=0, description="Property breadth in feet (for residential properties)")
 
 
 class Property(PropertyBase):
@@ -87,6 +95,9 @@ class Property(PropertyBase):
 class PropertyWithDetails(Property):
     """Property model with related images and features"""
     images: List['PropertyImage'] = []
+    project_images: List['PropertyProjectImage'] = []
+    floorplan_images: List['PropertyFloorplanImage'] = []
+    masterplan_images: List['PropertyMasterplanImage'] = []
     features: List['PropertyFeature'] = []
 
 
@@ -109,6 +120,92 @@ class PropertyImageCreate(PropertyImageBase):
 
 class PropertyImage(PropertyImageBase):
     """Complete property image model"""
+    id: int
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================
+# PROPERTY CATEGORIZED IMAGE MODELS
+# ============================================
+
+class PropertyImageCategory(str, Enum):
+    """Property image category enum"""
+    PROJECT = "project"
+    FLOORPLAN = "floorplan"
+    MASTERPLAN = "masterplan"
+
+
+class PropertyProjectImageBase(BaseModel):
+    """Base property project image model"""
+    property_id: int
+    image_url: str = Field(...)
+    image_order: int = 0
+
+
+class PropertyProjectImageCreate(PropertyProjectImageBase):
+    """Model for creating a new property project image"""
+    pass
+
+
+class PropertyProjectImage(PropertyProjectImageBase):
+    """Complete property project image model"""
+    id: int
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+
+
+class PropertyFloorplanImageBase(BaseModel):
+    """Base property floorplan image model"""
+    property_id: int
+    image_url: str = Field(...)
+    image_order: int = 0
+
+
+class PropertyFloorplanImageCreate(PropertyFloorplanImageBase):
+    """Model for creating a new property floorplan image"""
+    pass
+
+
+class PropertyFloorplanImage(PropertyFloorplanImageBase):
+    """Complete property floorplan image model"""
+    id: int
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+
+
+class PropertyMasterplanImageBase(BaseModel):
+    """Base property masterplan image model"""
+    property_id: int
+    image_url: str = Field(...)
+    image_order: int = 0
+
+
+class PropertyMasterplanImageCreate(PropertyMasterplanImageBase):
+    """Model for creating a new property masterplan image"""
+    pass
+
+
+class PropertyMasterplanImage(PropertyMasterplanImageBase):
+    """Complete property masterplan image model"""
     id: int
     created_at: datetime
 
@@ -306,6 +403,182 @@ class SystemMetricsCreate(SystemMetricsBase):
 
 class SystemMetrics(SystemMetricsBase):
     """Complete system metrics model"""
+    id: int
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================
+# BLOG MODELS
+# ============================================
+
+class BlogBase(BaseModel):
+    """Base blog model"""
+    title: str = Field(..., max_length=255)
+    excerpt: Optional[str] = None
+    content: str
+    category: Optional[str] = Field(None, max_length=100)
+    tags: Optional[List[str]] = Field(default=[], description="List of tags")
+    image_url: Optional[str] = None
+    author: Optional[str] = Field(None, max_length=255)
+    views: int = 0
+    is_featured: bool = False
+    is_active: bool = True
+
+
+class BlogCreate(BlogBase):
+    """Model for creating a new blog"""
+    pass
+
+
+class BlogUpdate(BaseModel):
+    """Model for updating a blog (all fields optional)"""
+    title: Optional[str] = Field(None, max_length=255)
+    excerpt: Optional[str] = None
+    content: Optional[str] = None
+    category: Optional[str] = Field(None, max_length=100)
+    tags: Optional[List[str]] = None
+    image_url: Optional[str] = None
+    author: Optional[str] = Field(None, max_length=255)
+    views: Optional[int] = None
+    is_featured: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+class Blog(BlogBase):
+    """Complete blog model"""
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================
+# USER MODELS
+# ============================================
+
+class UserRole(str, Enum):
+    """User role enum"""
+    ADMIN = "admin"
+    USER = "user"
+
+
+class UserBase(BaseModel):
+    """Base user model"""
+    email: str = Field(..., max_length=255)
+    password_hash: str = Field(..., max_length=255)
+    full_name: Optional[str] = Field(None, max_length=255)
+    role: UserRole = UserRole.ADMIN
+    is_active: bool = True
+
+
+class UserCreate(BaseModel):
+    """Model for creating a new user"""
+    email: str = Field(..., max_length=255)
+    password: str  # Will be hashed before storage
+    full_name: Optional[str] = Field(None, max_length=255)
+    role: UserRole = UserRole.ADMIN
+    is_active: bool = True
+
+
+class UserUpdate(BaseModel):
+    """Model for updating a user (all fields optional)"""
+    email: Optional[str] = Field(None, max_length=255)
+    password: Optional[str] = None  # Will be hashed before storage
+    password_hash: Optional[str] = Field(None, max_length=255)
+    full_name: Optional[str] = Field(None, max_length=255)
+    role: Optional[UserRole] = None
+    is_active: Optional[bool] = None
+
+
+class User(UserBase):
+    """Complete user model"""
+    id: int
+    last_login: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer('created_at', 'updated_at', 'last_login')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================
+# VISITOR INFO MODELS
+# ============================================
+
+class VisitorInfoBase(BaseModel):
+    """Base visitor info model"""
+    full_name: str = Field(..., max_length=255)
+    email: str = Field(..., max_length=255)
+    phone: str = Field(..., max_length=20)
+    looking_for: Optional[str] = None
+    ip_address: Optional[str] = Field(None, max_length=45)
+
+
+class VisitorInfoCreate(VisitorInfoBase):
+    """Model for creating a new visitor info entry"""
+    pass
+
+
+class VisitorInfo(VisitorInfoBase):
+    """Complete visitor info model"""
+    id: int
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================
+# LOG MODELS
+# ============================================
+
+class LogType(str, Enum):
+    """Log type enum"""
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+    ACTION = "action"
+
+
+class LogBase(BaseModel):
+    """Base log model"""
+    log_type: str = Field(..., max_length=50, description="Type of log (info, warning, error, action)")
+    action: str = Field(..., max_length=100, description="Action performed")
+    description: Optional[str] = None
+    user_email: Optional[str] = Field(None, max_length=255)
+    ip_address: Optional[str] = Field(None, max_length=45)
+    user_agent: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+class LogCreate(LogBase):
+    """Model for creating a new log entry"""
+    pass
+
+
+class Log(LogBase):
+    """Complete log model"""
     id: int
     created_at: datetime
 
