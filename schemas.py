@@ -783,7 +783,7 @@ class TemporaryMetricsCurrentResponseSchema(BaseModel):
 class CacheLogCreateSchema(BaseModel):
     """Schema for creating a cache log entry"""
     cache_key: str = Field(..., max_length=500, description="Cache key that was accessed")
-    operation: CacheOperation = Field(..., description="Cache operation: hit, miss, set, delete, clear")
+    operation: CacheOperation = Field(..., description="Cache operation: hit, miss, set, delete")
     cache_type: Optional[str] = Field(None, max_length=50, description="Type of cache: property, partner, testimonial, etc.")
     response_time_ms: Optional[float] = Field(None, ge=0, description="Response time in milliseconds")
     cache_size_kb: Optional[float] = Field(None, ge=0, description="Size of cached data in KB")

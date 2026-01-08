@@ -1530,13 +1530,33 @@ def get_property(property_id: int):
                 ORDER BY image_order, created_at
             """
             images = execute_query(images_query, (property_id, property_id, property_id))
-        normalized_images = []
+        
+        # Separate images by type and normalize URLs
+        project_images = []
+        floorplan_images = []
+        masterplan_images = []
+        
         for img in images:
             img_dict = dict(img)
             if 'image_url' in img_dict and img_dict['image_url']:
                 img_dict['image_url'] = normalize_image_url(img_dict['image_url'])
-            normalized_images.append(img_dict)
-        property_data['images'] = normalized_images
+            
+            # Remove image_type from dict as it's not part of the schema
+            image_type = img_dict.pop('image_type', None)
+            
+            # Categorize images by type
+            if image_type == 'project':
+                project_images.append(img_dict)
+            elif image_type == 'floorplan':
+                floorplan_images.append(img_dict)
+            elif image_type == 'masterplan':
+                masterplan_images.append(img_dict)
+        
+        # Assign to correct fields in property_data
+        property_data['images'] = []  # Empty list - PropertyImageSchema requires is_primary which these images don't have
+        property_data['project_images'] = project_images
+        property_data['floorplan_images'] = floorplan_images
+        property_data['masterplan_images'] = masterplan_images
         
         # Get features from the appropriate table
         features_query = f"SELECT * FROM {feature_table} WHERE property_id = %s ORDER BY feature_name"
@@ -2577,7 +2597,7 @@ def get_cache_logs():
 def create_cache_log():
     """Create a new cache log entry - always returns success even on errors"""
     default_cache_key = 'unknown'
-    default_operation = CacheOperation.CLEAR
+    default_operation = CacheOperation.MISS
     default_cache_type = None
     default_response_time_ms = None
     default_cache_size_kb = None
@@ -2621,7 +2641,7 @@ def create_cache_log():
                 # Try to extract basic fields manually
                 if isinstance(data, dict):
                     cache_key = data.get('cache_key', default_cache_key)
-                    operation_str = data.get('operation', 'clear')
+                    operation_str = data.get('operation', 'miss')
                     try:
                         operation = CacheOperation(operation_str.lower())
                     except ValueError:
