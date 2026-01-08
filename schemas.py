@@ -285,7 +285,7 @@ class PartnerCreateSchema(BaseModel):
     """Schema for creating a partner"""
     name: str = Field(..., max_length=255)
     logo_url: Optional[str] = None  # Removed max_length to allow base64 images (will be converted to file)
-    website_url: Optional[HttpUrl] = None
+    website_url: Optional[str] = None  # Changed from HttpUrl to str for flexibility
     is_active: bool = True
     display_order: int = 0
 
@@ -294,7 +294,7 @@ class PartnerUpdateSchema(BaseModel):
     """Schema for updating a partner"""
     name: Optional[str] = Field(None, max_length=255)
     logo_url: Optional[str] = None  # Removed max_length to allow base64 images (will be converted to file)
-    website_url: Optional[HttpUrl] = None
+    website_url: Optional[str] = None  # Changed from HttpUrl to str for flexibility
     is_active: Optional[bool] = None
     display_order: Optional[int] = None
 

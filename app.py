@@ -41,6 +41,7 @@ from database import (
     init_db_pool, close_db_pool, get_db_cursor,
     test_connection, execute_query, execute_update, execute_insert
 )
+from pydantic import ValidationError
 from schemas import (
     # Common
     MessageResponse, ErrorResponse, PaginationParams, PaginatedResponse,
@@ -828,6 +829,13 @@ def normalize_image_url(url: Optional[str]) -> Optional[str]:
     """Normalize image URL for frontend compatibility"""
     if not url:
         return None
+    # If it's already a full URL (http/https), return as is
+    if url.startswith('http://') or url.startswith('https://'):
+        return url
+    # If it's already a data URL (base64), return as is
+    if url.startswith('data:'):
+        return url
+    # If it already starts with /images/ or /frontend/, return as is
     if url.startswith('/images/') or url.startswith('/frontend/'):
         return url
     clean_url = url.lstrip('/')
@@ -1975,7 +1983,15 @@ def update_partner(partner_id: int):
         if not data:
             abort_with_message(400, "Invalid request data")
         
-        partner_data = PartnerUpdateSchema(**data)
+        try:
+            partner_data = PartnerUpdateSchema(**data)
+        except ValidationError as e:
+            error_messages = []
+            for error in e.errors():
+                field = '.'.join(str(loc) for loc in error['loc'])
+                message = error['msg']
+                error_messages.append(f"{field}: {message}")
+            abort_with_message(400, f"Validation error: {', '.join(error_messages)}")
         
         updates = []
         params = []
@@ -1989,7 +2005,7 @@ def update_partner(partner_id: int):
             params.append(processed_logo_url)
         if partner_data.website_url is not None:
             updates.append("website_url = %s")
-            params.append(str(partner_data.website_url))
+            params.append(partner_data.website_url)
         if partner_data.is_active is not None:
             updates.append("is_active = %s")
             params.append(partner_data.is_active)
