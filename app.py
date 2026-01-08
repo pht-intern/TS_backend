@@ -35,6 +35,7 @@ import threading
 import time
 import psutil
 import platform
+import os
 
 from database import (
     init_db_pool, close_db_pool, get_db_cursor,
@@ -72,7 +73,7 @@ from schemas import (
     # Cache Logs
     CacheLogCreateSchema, CacheLogResponseSchema, CacheLogListResponseSchema, CacheLogFilterSchema
 )
-from models import PropertyType, PropertyStatus, InquiryStatus
+from models import PropertyType, PropertyStatus, InquiryStatus, CacheOperation, CacheStatus
 from passlib.context import CryptContext
 import warnings
 import logging
@@ -638,10 +639,98 @@ if init_db_pool():
     if test_connection():
         print("Database connection successful!")
         setup_admin_user()
+        # Create application_metrics table if it doesn't exist
+        try:
+            create_app_metrics_table = """
+                CREATE TABLE IF NOT EXISTS application_metrics (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    endpoint VARCHAR(255) NOT NULL COMMENT 'API endpoint path',
+                    method VARCHAR(10) NOT NULL COMMENT 'HTTP method',
+                    response_time_ms DECIMAL(10, 2) NOT NULL COMMENT 'Response time in milliseconds',
+                    status_code INT NOT NULL COMMENT 'HTTP status code',
+                    is_error BOOLEAN DEFAULT FALSE COMMENT 'Whether the request resulted in an error',
+                    ip_address VARCHAR(45) NULL COMMENT 'Client IP address',
+                    user_agent TEXT NULL COMMENT 'User agent string',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_endpoint (endpoint),
+                    INDEX idx_method (method),
+                    INDEX idx_status_code (status_code),
+                    INDEX idx_created_at (created_at),
+                    INDEX idx_endpoint_created (endpoint, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """
+            execute_update(create_app_metrics_table)
+            print("Application metrics table ready")
+        except Exception as e:
+            print(f"Warning: Could not create application_metrics table: {str(e)}")
     else:
         print("Warning: Database connection test failed")
 else:
     print("Warning: Database pool initialization failed")
+
+
+# ============================================
+# APPLICATION METRICS TRACKING MIDDLEWARE
+# ============================================
+
+@app.before_request
+def track_request_start():
+    """Track request start time for response time calculation"""
+    request.start_time = time.time()
+
+@app.after_request
+def track_request_metrics(response):
+    """Track application metrics for each API request"""
+    try:
+        # Skip tracking for static files and certain endpoints
+        path = request.path
+        if (path.startswith('/static/') or 
+            path.startswith('/images/') or 
+            path.startswith('/favicon') or
+            path == '/' or
+            'metrics' in path.lower()):  # Don't track metrics endpoints to avoid recursion
+            return response
+        
+        # Calculate response time
+        if hasattr(request, 'start_time'):
+            response_time_ms = (time.time() - request.start_time) * 1000
+        else:
+            response_time_ms = 0
+        
+        # Get request details
+        endpoint = path
+        method = request.method
+        status_code = response.status_code
+        is_error = status_code >= 400
+        ip_address = get_client_ip()
+        user_agent = request.headers.get('User-Agent', '')[:500]  # Limit length
+        
+        # Store metrics in database (async in background to avoid slowing down requests)
+        def store_metrics():
+            try:
+                query = """
+                    INSERT INTO application_metrics 
+                    (endpoint, method, response_time_ms, status_code, is_error, ip_address, user_agent)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """
+                execute_update(query, (
+                    endpoint, method, response_time_ms, status_code, 
+                    is_error, ip_address, user_agent
+                ))
+            except Exception as e:
+                # Silently fail - don't break the request if metrics fail
+                pass
+        
+        # Store in background thread
+        thread = threading.Thread(target=store_metrics)
+        thread.daemon = True
+        thread.start()
+        
+    except Exception:
+        # Silently fail - don't break the request if metrics fail
+        pass
+    
+    return response
 
 
 # ============================================
@@ -764,7 +853,7 @@ from functools import wraps
 def require_admin_auth(f):
     """
     Decorator to require admin authentication for protected routes.
-    Checks for admin email match in request headers or session.
+    Verifies user exists in database and has admin role.
     """
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -781,8 +870,43 @@ def require_admin_auth(f):
         if auth_email and auth_email.startswith('Email '):
             auth_email = auth_email.replace('Email ', '')
         
-        # Validate email matches admin email
-        if not auth_email or auth_email.lower() != allowed_admin_email.lower():
+        # Validate email is provided
+        if not auth_email:
+            abort_with_message(401, "Unauthorized: Admin authentication required")
+        
+        # Normalize email for comparison
+        auth_email = auth_email.lower().strip()
+        allowed_admin_email = allowed_admin_email.lower().strip()
+        
+        # Verify email matches admin email from environment
+        if auth_email != allowed_admin_email:
+            abort_with_message(401, "Unauthorized: Admin authentication required")
+        
+        # Verify user exists in database and has admin role
+        try:
+            # Test database connection
+            connection_test = test_connection()
+            if not connection_test.get("connected", False):
+                abort_with_message(500, "Database connection failed. Please try again later.")
+            
+            # Query user from database to verify they exist and have admin role
+            user_query = "SELECT id, email, role, is_active FROM users WHERE email = %s AND is_active = 1 AND role = 'admin' LIMIT 1"
+            users = execute_query(user_query, (auth_email,))
+            
+            if not users or len(users) == 0:
+                abort_with_message(401, "Unauthorized: Admin authentication required")
+            
+            user = users[0]
+            
+            # Double-check user has admin role and is active
+            if user.get('role') != 'admin' or not user.get('is_active'):
+                abort_with_message(403, "Access denied: Admin role required")
+            
+        except Exception as db_error:
+            error_msg = str(db_error)
+            print(f"Database error during admin auth verification: {error_msg}")
+            traceback.print_exc()
+            # Don't expose database errors to client, just return unauthorized
             abort_with_message(401, "Unauthorized: Admin authentication required")
         
         return f(*args, **kwargs)
@@ -829,9 +953,9 @@ def login():
             suggestion = connection_test.get("suggestion", "Please check database configuration in cPanel.")
             abort_with_message(500, f"Database connection failed: {error_msg}. {suggestion}")
         
-        # Query user from database
+        # Query user from database - verify email, active status, and admin role
         try:
-            user_query = "SELECT * FROM users WHERE email = %s AND is_active = 1"
+            user_query = "SELECT * FROM users WHERE email = %s AND is_active = 1 AND role = 'admin'"
             users = execute_query(user_query, (login_data.email,))
         except Exception as db_error:
             error_msg = str(db_error)
@@ -852,8 +976,16 @@ def login():
         
         user = users[0]
         
+        # Verify password hash matches
+        if not user.get('password_hash'):
+            abort_with_message(401, "Invalid email or password")
+        
         if not verify_password(login_data.password, user['password_hash']):
             abort_with_message(401, "Invalid email or password")
+        
+        # Double-check user has admin role
+        if user.get('role') != 'admin':
+            abort_with_message(403, "Access denied: Admin role required")
         
         # Update last login timestamp
         try:
@@ -1146,31 +1278,88 @@ def get_properties():
             property_id = prop_dict.get('id')
             property_category = prop_dict.get('property_category', 'residential')
             
-            # Determine which image table to use
-            image_table = 'residential_property_images' if property_category == 'residential' else 'plot_property_images'
-            
-            # Fetch primary image from the image table
+            # Fetch primary image from the new image tables (project, floorplan, masterplan)
             if property_id:
                 try:
-                    primary_image_query = f"""
-                        SELECT image_url 
-                        FROM {image_table} 
-                        WHERE property_id = %s 
-                        ORDER BY is_primary DESC, image_order ASC, created_at ASC 
-                        LIMIT 1
-                    """
-                    primary_images = execute_query(primary_image_query, (property_id,))
+                    if property_category == 'residential':
+                        primary_image_query = """
+                            SELECT image_url 
+                            FROM (
+                                SELECT image_url, image_order, created_at
+                                FROM residential_property_project_images
+                                WHERE property_id = %s
+                                UNION ALL
+                                SELECT image_url, image_order, created_at
+                                FROM residential_property_floorplan_images
+                                WHERE property_id = %s
+                                UNION ALL
+                                SELECT image_url, image_order, created_at
+                                FROM residential_property_masterplan_images
+                                WHERE property_id = %s
+                            ) AS all_images
+                            ORDER BY image_order ASC, created_at ASC 
+                            LIMIT 1
+                        """
+                        all_images_query = """
+                            SELECT image_url 
+                            FROM (
+                                SELECT image_url, image_order, created_at
+                                FROM residential_property_project_images
+                                WHERE property_id = %s
+                                UNION ALL
+                                SELECT image_url, image_order, created_at
+                                FROM residential_property_floorplan_images
+                                WHERE property_id = %s
+                                UNION ALL
+                                SELECT image_url, image_order, created_at
+                                FROM residential_property_masterplan_images
+                                WHERE property_id = %s
+                            ) AS all_images
+                            ORDER BY image_order ASC, created_at ASC
+                        """
+                    else:
+                        primary_image_query = """
+                            SELECT image_url 
+                            FROM (
+                                SELECT image_url, image_order, created_at
+                                FROM plot_property_project_images
+                                WHERE property_id = %s
+                                UNION ALL
+                                SELECT image_url, image_order, created_at
+                                FROM plot_property_floorplan_images
+                                WHERE property_id = %s
+                                UNION ALL
+                                SELECT image_url, image_order, created_at
+                                FROM plot_property_masterplan_images
+                                WHERE property_id = %s
+                            ) AS all_images
+                            ORDER BY image_order ASC, created_at ASC 
+                            LIMIT 1
+                        """
+                        all_images_query = """
+                            SELECT image_url 
+                            FROM (
+                                SELECT image_url, image_order, created_at
+                                FROM plot_property_project_images
+                                WHERE property_id = %s
+                                UNION ALL
+                                SELECT image_url, image_order, created_at
+                                FROM plot_property_floorplan_images
+                                WHERE property_id = %s
+                                UNION ALL
+                                SELECT image_url, image_order, created_at
+                                FROM plot_property_masterplan_images
+                                WHERE property_id = %s
+                            ) AS all_images
+                            ORDER BY image_order ASC, created_at ASC
+                        """
+                    
+                    primary_images = execute_query(primary_image_query, (property_id, property_id, property_id))
                     if primary_images and primary_images[0].get('image_url'):
                         prop_dict['primary_image'] = normalize_image_url(primary_images[0]['image_url'])
                     
                     # Also fetch all images for the property
-                    all_images_query = f"""
-                        SELECT image_url 
-                        FROM {image_table} 
-                        WHERE property_id = %s 
-                        ORDER BY is_primary DESC, image_order ASC, created_at ASC
-                    """
-                    all_images = execute_query(all_images_query, (property_id,))
+                    all_images = execute_query(all_images_query, (property_id, property_id, property_id))
                     if all_images:
                         prop_dict['images'] = [
                             {'image_url': normalize_image_url(img['image_url'])} 
@@ -1261,7 +1450,6 @@ def get_property(property_id: int):
         """
         properties = execute_query(residential_query, (property_id,))
         property_category = 'residential'
-        image_table = 'residential_property_images'
         feature_table = 'residential_property_features'
         
         # If not found in residential, check plot_properties
@@ -1281,7 +1469,6 @@ def get_property(property_id: int):
             """
             properties = execute_query(plot_query, (property_id,))
             property_category = 'plot'
-            image_table = 'plot_property_images'
             feature_table = 'plot_property_features'
         
         if not properties:
@@ -1302,9 +1489,39 @@ def get_property(property_id: int):
             else:
                 property_data['location'] = 'Location not specified'
         
-        # Get images from the appropriate table
-        images_query = f"SELECT * FROM {image_table} WHERE property_id = %s ORDER BY image_order, created_at"
-        images = execute_query(images_query, (property_id,))
+        # Get images from the new image tables (project, floorplan, masterplan)
+        if property_category == 'residential':
+            images_query = """
+                SELECT id, property_id, image_url, image_order, created_at, 'project' as image_type
+                FROM residential_property_project_images
+                WHERE property_id = %s
+                UNION ALL
+                SELECT id, property_id, image_url, image_order, created_at, 'floorplan' as image_type
+                FROM residential_property_floorplan_images
+                WHERE property_id = %s
+                UNION ALL
+                SELECT id, property_id, image_url, image_order, created_at, 'masterplan' as image_type
+                FROM residential_property_masterplan_images
+                WHERE property_id = %s
+                ORDER BY image_order, created_at
+            """
+            images = execute_query(images_query, (property_id, property_id, property_id))
+        else:
+            images_query = """
+                SELECT id, property_id, image_url, image_order, created_at, 'project' as image_type
+                FROM plot_property_project_images
+                WHERE property_id = %s
+                UNION ALL
+                SELECT id, property_id, image_url, image_order, created_at, 'floorplan' as image_type
+                FROM plot_property_floorplan_images
+                WHERE property_id = %s
+                UNION ALL
+                SELECT id, property_id, image_url, image_order, created_at, 'masterplan' as image_type
+                FROM plot_property_masterplan_images
+                WHERE property_id = %s
+                ORDER BY image_order, created_at
+            """
+            images = execute_query(images_query, (property_id, property_id, property_id))
         normalized_images = []
         for img in images:
             img_dict = dict(img)
@@ -1387,12 +1604,12 @@ def create_residential_property():
             ))
             property_id = cursor.lastrowid
             
-            # Insert images
+            # Insert images into project_images table (default category)
             if images:
                 processed_images = process_image_urls(images, FRONTEND_DIR)
                 for idx, image_url in enumerate(processed_images):
-                    image_query = "INSERT INTO residential_property_images (property_id, image_url, image_order, is_primary) VALUES (%s, %s, %s, %s)"
-                    cursor.execute(image_query, (property_id, image_url, idx, 1 if idx == 0 else 0))
+                    image_query = "INSERT INTO residential_property_project_images (property_id, image_url, image_order) VALUES (%s, %s, %s)"
+                    cursor.execute(image_query, (property_id, image_url, idx))
             
             # Insert features
             if features:
@@ -1459,12 +1676,12 @@ def create_plot_property():
             ))
             property_id = cursor.lastrowid
             
-            # Insert images
+            # Insert images into project_images table (default category)
             if images:
                 processed_images = process_image_urls(images, FRONTEND_DIR)
                 for idx, image_url in enumerate(processed_images):
-                    image_query = "INSERT INTO plot_property_images (property_id, image_url, image_order, is_primary) VALUES (%s, %s, %s, %s)"
-                    cursor.execute(image_query, (property_id, image_url, idx, 1 if idx == 0 else 0))
+                    image_query = "INSERT INTO plot_property_project_images (property_id, image_url, image_order) VALUES (%s, %s, %s)"
+                    cursor.execute(image_query, (property_id, image_url, idx))
             
             # Insert features
             if features:
@@ -2225,6 +2442,461 @@ def get_all_logs():
         abort_with_message(500, f"Error fetching logs: {str(e)}")
 
 
+@app.route("/api/admin/cache-logs", methods=["GET"])
+@require_admin_auth
+def get_cache_logs():
+    """Get cache logs with filtering and pagination (admin endpoint)"""
+    try:
+        # Get pagination parameters
+        page = request.args.get('page', default=1, type=int)
+        limit = request.args.get('limit', default=50, type=int)
+        
+        if page < 1:
+            page = 1
+        if limit < 1:
+            limit = 50
+        if limit > 500:
+            limit = 500
+        
+        offset = (page - 1) * limit
+        
+        # Get filter parameters
+        operation_filter = request.args.get('operation')
+        status_filter = request.args.get('status')
+        search_query = request.args.get('search')
+        
+        # Build WHERE clause
+        conditions = []
+        params = []
+        
+        if operation_filter:
+            # Validate operation
+            try:
+                operation = CacheOperation(operation_filter.lower())
+                conditions.append("operation = %s")
+                params.append(operation.value)
+            except ValueError:
+                pass  # Invalid operation, ignore filter
+        
+        if status_filter:
+            # Validate status
+            try:
+                status = CacheStatus(status_filter.lower())
+                conditions.append("status = %s")
+                params.append(status.value)
+            except ValueError:
+                pass  # Invalid status, ignore filter
+        
+        if search_query:
+            # Search in cache_key and cache_type
+            conditions.append("(cache_key LIKE %s OR cache_type LIKE %s)")
+            search_pattern = f"%{search_query}%"
+            params.extend([search_pattern, search_pattern])
+        
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        
+        # Get total count
+        count_query = f"SELECT COUNT(*) as total FROM cache_logs WHERE {where_clause}"
+        count_result = execute_query(count_query, tuple(params))
+        total = count_result[0]['total'] if count_result else 0
+        
+        # Calculate pagination
+        pages = (total + limit - 1) // limit if limit > 0 else 0
+        has_more = page < pages
+        
+        # Get cache logs
+        query = f"""
+            SELECT * FROM cache_logs 
+            WHERE {where_clause} 
+            ORDER BY created_at DESC 
+            LIMIT %s OFFSET %s
+        """
+        params.extend([limit, offset])
+        
+        logs = execute_query(query, tuple(params))
+        
+        # Parse JSON metadata and convert to response schema
+        cache_logs = []
+        for log in logs:
+            # Parse JSON metadata if present
+            if log.get('metadata'):
+                try:
+                    if isinstance(log['metadata'], str):
+                        log['metadata'] = json.loads(log['metadata'])
+                except (json.JSONDecodeError, TypeError):
+                    log['metadata'] = None
+            
+            # Convert datetime to string if needed
+            if log.get('created_at') and isinstance(log['created_at'], datetime):
+                log['created_at'] = log['created_at'].isoformat()
+            
+            # Create response schema
+            try:
+                cache_log = CacheLogResponseSchema(**dict(log))
+                cache_logs.append(cache_log.dict())
+            except Exception as e:
+                print(f"Error parsing cache log {log.get('id')}: {str(e)}")
+                continue
+        
+        # Return response in expected format
+        response_data = CacheLogListResponseSchema(
+            success=True,
+            logs=cache_logs,
+            total=total,
+            page=page,
+            limit=limit,
+            pages=pages,
+            has_more=has_more
+        )
+        
+        return jsonify(response_data.dict())
+        
+    except Exception as e:
+        print(f"Error fetching cache logs: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error fetching cache logs: {str(e)}")
+
+
+@app.route("/api/cache-logs", methods=["POST"])
+def create_cache_log():
+    """Create a new cache log entry - always returns success even on errors"""
+    default_cache_key = 'unknown'
+    default_operation = CacheOperation.CLEAR
+    default_cache_type = None
+    default_response_time_ms = None
+    default_cache_size_kb = None
+    default_status = CacheStatus.SUCCESS
+    default_error_message = None
+    default_ip = None
+    default_user_agent = None
+    default_metadata = None
+    default_created_at = datetime.now()
+    
+    cache_key = default_cache_key
+    operation = default_operation
+    cache_type = default_cache_type
+    response_time_ms = default_response_time_ms
+    cache_size_kb = default_cache_size_kb
+    status = default_status
+    error_message = default_error_message
+    ip_address = default_ip
+    user_agent = default_user_agent
+    metadata = default_metadata
+    created_at = default_created_at
+    
+    try:
+        ip_address = get_client_ip()
+        user_agent = request.headers.get("User-Agent", None)
+        
+        data = request.get_json()
+        if data:
+            try:
+                log_data = CacheLogCreateSchema(**data)
+                cache_key = log_data.cache_key or default_cache_key
+                operation = log_data.operation or default_operation
+                cache_type = log_data.cache_type
+                response_time_ms = log_data.response_time_ms
+                cache_size_kb = log_data.cache_size_kb
+                status = log_data.status or default_status
+                error_message = log_data.error_message
+                metadata = log_data.metadata
+            except Exception as e:
+                print(f"Error parsing cache log data: {str(e)}")
+                # Try to extract basic fields manually
+                if isinstance(data, dict):
+                    cache_key = data.get('cache_key', default_cache_key)
+                    operation_str = data.get('operation', 'clear')
+                    try:
+                        operation = CacheOperation(operation_str.lower())
+                    except ValueError:
+                        operation = default_operation
+                    cache_type = data.get('cache_type')
+                    response_time_ms = data.get('response_time_ms')
+                    cache_size_kb = data.get('cache_size_kb')
+                    status_str = data.get('status', 'success')
+                    try:
+                        status = CacheStatus(status_str.lower())
+                    except ValueError:
+                        status = default_status
+                    error_message = data.get('error_message')
+                    metadata = data.get('metadata')
+        
+        query = """INSERT INTO cache_logs 
+                   (cache_key, operation, cache_type, response_time_ms, cache_size_kb, 
+                    status, error_message, ip_address, user_agent, metadata) 
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+        
+        metadata_json = None
+        if metadata:
+            try:
+                metadata_json = json.dumps(metadata)
+            except Exception:
+                metadata_json = None
+        
+        try:
+            with get_db_cursor() as cursor:
+                cursor.execute(query, (
+                    cache_key, operation.value, cache_type, response_time_ms, cache_size_kb,
+                    status.value, error_message, ip_address, user_agent, metadata_json
+                ))
+                log_id = cursor.lastrowid
+            
+            try:
+                result = execute_query("SELECT * FROM cache_logs WHERE id = %s", (log_id,))
+                if result and len(result) > 0:
+                    log_dict = dict(result[0])
+                    
+                    if log_dict.get('metadata'):
+                        try:
+                            if isinstance(log_dict['metadata'], str):
+                                log_dict['metadata'] = json.loads(log_dict['metadata'])
+                        except:
+                            log_dict['metadata'] = None
+                    
+                    if 'created_at' not in log_dict or log_dict['created_at'] is None:
+                        log_dict['created_at'] = datetime.now()
+                    
+                    # Convert enum values to strings
+                    if 'operation' in log_dict and isinstance(log_dict['operation'], str):
+                        try:
+                            log_dict['operation'] = CacheOperation(log_dict['operation'].lower()).value
+                        except:
+                            pass
+                    if 'status' in log_dict and isinstance(log_dict['status'], str):
+                        try:
+                            log_dict['status'] = CacheStatus(log_dict['status'].lower()).value
+                        except:
+                            pass
+                    
+                    response = CacheLogResponseSchema(**log_dict)
+                    return jsonify(response.dict())
+            except Exception as e:
+                print(f"Error fetching created cache log: {str(e)}")
+                pass
+        except Exception as e:
+            print(f"Error inserting cache log: {str(e)}")
+            pass
+    except Exception as e:
+        print(f"Error in create_cache_log: {str(e)}")
+        pass
+    
+    # Return minimal success response
+    try:
+        response = CacheLogResponseSchema(
+            id=0,
+            cache_key=cache_key,
+            operation=operation,
+            cache_type=cache_type,
+            response_time_ms=response_time_ms,
+            cache_size_kb=cache_size_kb,
+            status=status,
+            error_message=error_message,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            metadata=metadata,
+            created_at=created_at
+        )
+        return jsonify(response.dict())
+    except Exception:
+        return jsonify({"success": True, "message": "Cache log created"})
+
+
+@app.route("/api/admin/application-metrics", methods=["GET"])
+@require_admin_auth
+def get_application_metrics():
+    """Get application metrics aggregated by time period"""
+    try:
+        hours = request.args.get('hours', default=24, type=int)
+        if hours < 1:
+            hours = 24
+        if hours > 168:  # Max 7 days
+            hours = 168
+        
+        # Get metrics aggregated by hour
+        query = """
+            SELECT 
+                DATE_FORMAT(created_at, '%%Y-%%m-%%d %%H:00:00') as time_bucket,
+                COUNT(*) as request_count,
+                AVG(response_time_ms) as avg_response_time,
+                MAX(response_time_ms) as max_response_time,
+                MIN(response_time_ms) as min_response_time,
+                SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) as error_count,
+                SUM(CASE WHEN status_code >= 200 AND status_code < 300 THEN 1 ELSE 0 END) as success_count,
+                SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) as client_error_count,
+                SUM(CASE WHEN status_code >= 500 THEN 1 ELSE 0 END) as server_error_count
+            FROM application_metrics
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s HOUR)
+            GROUP BY time_bucket
+            ORDER BY time_bucket ASC
+        """
+        
+        metrics = execute_query(query, (hours,))
+        
+        # Get current stats (last hour)
+        current_query = """
+            SELECT 
+                COUNT(*) as request_count,
+                AVG(response_time_ms) as avg_response_time,
+                SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) as error_count,
+                SUM(CASE WHEN status_code >= 200 AND status_code < 300 THEN 1 ELSE 0 END) as success_count
+            FROM application_metrics
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+        """
+        
+        current_stats = execute_query(current_query)
+        current = current_stats[0] if current_stats and len(current_stats) > 0 else {}
+        
+        # Get top endpoints by request count
+        top_endpoints_query = """
+            SELECT 
+                endpoint,
+                method,
+                COUNT(*) as request_count,
+                AVG(response_time_ms) as avg_response_time,
+                SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) as error_count
+            FROM application_metrics
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s HOUR)
+            GROUP BY endpoint, method
+            ORDER BY request_count DESC
+            LIMIT 10
+        """
+        
+        top_endpoints = execute_query(top_endpoints_query, (hours,))
+        
+        # Get cache statistics from cache_logs
+        cache_stats_query = """
+            SELECT 
+                COUNT(*) as total_cache_ops,
+                SUM(CASE WHEN operation = 'hit' THEN 1 ELSE 0 END) as cache_hits,
+                SUM(CASE WHEN operation = 'miss' THEN 1 ELSE 0 END) as cache_misses,
+                AVG(response_time_ms) as avg_cache_time
+            FROM cache_logs
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s HOUR)
+        """
+        
+        cache_stats = execute_query(cache_stats_query, (hours,))
+        cache_data = cache_stats[0] if cache_stats and len(cache_stats) > 0 else {}
+        
+        # Calculate cache hit rate
+        total_cache_ops = cache_data.get('total_cache_ops', 0) or 0
+        cache_hits = cache_data.get('cache_hits', 0) or 0
+        cache_hit_rate = (cache_hits / total_cache_ops * 100) if total_cache_ops > 0 else 0
+        
+        # Get system metrics (CPU, RAM, Bandwidth)
+        system_metrics_query = """
+            SELECT 
+                cpu_usage,
+                ram_usage,
+                ram_used_mb,
+                ram_total_mb,
+                bandwidth_in_mb,
+                bandwidth_out_mb,
+                bandwidth_total_mb,
+                created_at
+            FROM system_metrics
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s HOUR)
+            ORDER BY created_at ASC
+        """
+        
+        system_metrics = execute_query(system_metrics_query, (hours,))
+        
+        # Get current system metrics (most recent)
+        current_system_query = """
+            SELECT 
+                cpu_usage,
+                ram_usage,
+                ram_used_mb,
+                ram_total_mb,
+                bandwidth_in_mb,
+                bandwidth_out_mb,
+                bandwidth_total_mb
+            FROM system_metrics
+            ORDER BY created_at DESC
+            LIMIT 1
+        """
+        
+        current_system = execute_query(current_system_query)
+        current_system_data = current_system[0] if current_system and len(current_system) > 0 else {}
+        
+        # Format system metrics time series
+        system_time_series = []
+        for sm in system_metrics:
+            created_at = sm.get('created_at')
+            if isinstance(created_at, datetime):
+                time_str = created_at.strftime('%Y-%m-%d %H:00:00')
+            else:
+                time_str = str(created_at)
+            
+            system_time_series.append({
+                "time": time_str,
+                "cpu_usage": float(sm.get('cpu_usage', 0) or 0),
+                "ram_usage": float(sm.get('ram_usage', 0) or 0),
+                "ram_used_mb": float(sm.get('ram_used_mb', 0) or 0),
+                "ram_total_mb": float(sm.get('ram_total_mb', 0) or 0),
+                "bandwidth_in_mb": float(sm.get('bandwidth_in_mb', 0) or 0),
+                "bandwidth_out_mb": float(sm.get('bandwidth_out_mb', 0) or 0),
+                "bandwidth_total_mb": float(sm.get('bandwidth_total_mb', 0) or 0)
+            })
+        
+        return jsonify({
+            "success": True,
+            "time_series": [
+                {
+                    "time": m.get('time_bucket', ''),
+                    "request_count": int(m.get('request_count', 0) or 0),
+                    "avg_response_time": float(m.get('avg_response_time', 0) or 0),
+                    "max_response_time": float(m.get('max_response_time', 0) or 0),
+                    "min_response_time": float(m.get('min_response_time', 0) or 0),
+                    "error_count": int(m.get('error_count', 0) or 0),
+                    "success_count": int(m.get('success_count', 0) or 0),
+                    "client_error_count": int(m.get('client_error_count', 0) or 0),
+                    "server_error_count": int(m.get('server_error_count', 0) or 0)
+                }
+                for m in metrics
+            ],
+            "current": {
+                "request_count": int(current.get('request_count', 0) or 0),
+                "avg_response_time": float(current.get('avg_response_time', 0) or 0),
+                "error_count": int(current.get('error_count', 0) or 0),
+                "success_count": int(current.get('success_count', 0) or 0)
+            },
+            "top_endpoints": [
+                {
+                    "endpoint": e.get('endpoint', ''),
+                    "method": e.get('method', ''),
+                    "request_count": int(e.get('request_count', 0) or 0),
+                    "avg_response_time": float(e.get('avg_response_time', 0) or 0),
+                    "error_count": int(e.get('error_count', 0) or 0)
+                }
+                for e in top_endpoints
+            ],
+            "cache_stats": {
+                "total_operations": int(total_cache_ops),
+                "cache_hits": int(cache_hits),
+                "cache_misses": int(cache_data.get('cache_misses', 0) or 0),
+                "cache_hit_rate": round(cache_hit_rate, 2),
+                "avg_cache_time": float(cache_data.get('avg_cache_time', 0) or 0)
+            },
+            "system_metrics": {
+                "time_series": system_time_series,
+                "current": {
+                    "cpu_usage": float(current_system_data.get('cpu_usage', 0) or 0),
+                    "ram_usage": float(current_system_data.get('ram_usage', 0) or 0),
+                    "ram_used_mb": float(current_system_data.get('ram_used_mb', 0) or 0),
+                    "ram_total_mb": float(current_system_data.get('ram_total_mb', 0) or 0),
+                    "bandwidth_in_mb": float(current_system_data.get('bandwidth_in_mb', 0) or 0),
+                    "bandwidth_out_mb": float(current_system_data.get('bandwidth_out_mb', 0) or 0),
+                    "bandwidth_total_mb": float(current_system_data.get('bandwidth_total_mb', 0) or 0)
+                }
+            }
+        })
+        
+    except Exception as e:
+        print(f"Error fetching application metrics: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error fetching application metrics: {str(e)}")
+
+
 # ============================================
 # ROUTES - BLOGS
 # ============================================
@@ -2860,16 +3532,17 @@ def collect_metrics():
     """Collect and store system metrics in both permanent and temporary tables"""
     try:
         # Create system_metrics table if it doesn't exist (permanent storage for graphs)
+        # Note: These metrics track the APPLICATION PROCESS only, not the entire system
         create_system_table_query = """
             CREATE TABLE IF NOT EXISTS system_metrics (
                 id INT AUTO_INCREMENT PRIMARY KEY,
-                cpu_usage DECIMAL(5, 2) NOT NULL COMMENT 'CPU usage percentage',
-                ram_usage DECIMAL(5, 2) NOT NULL COMMENT 'RAM usage percentage',
-                ram_used_mb DECIMAL(10, 2) NOT NULL COMMENT 'RAM used in MB',
-                ram_total_mb DECIMAL(10, 2) NOT NULL COMMENT 'Total RAM in MB',
-                bandwidth_in_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Bandwidth in (MB)',
-                bandwidth_out_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Bandwidth out (MB)',
-                bandwidth_total_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Total bandwidth (MB)',
+                cpu_usage DECIMAL(5, 2) NOT NULL COMMENT 'Application process CPU usage percentage',
+                ram_usage DECIMAL(5, 2) NOT NULL COMMENT 'Application process RAM usage percentage (of system total)',
+                ram_used_mb DECIMAL(10, 2) NOT NULL COMMENT 'Application process RAM used in MB',
+                ram_total_mb DECIMAL(10, 2) NOT NULL COMMENT 'Total system RAM in MB (for percentage calculation)',
+                bandwidth_in_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Application bandwidth in (MB)',
+                bandwidth_out_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Application bandwidth out (MB)',
+                bandwidth_total_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Total application bandwidth (MB)',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 INDEX idx_created_at (created_at),
                 INDEX idx_created_at_desc (created_at DESC)
@@ -2883,16 +3556,17 @@ def collect_metrics():
             # Continue anyway - table might already exist
         
         # Create temporary_metrics table if it doesn't exist (temporary storage for stat cards)
+        # Note: These metrics track the APPLICATION PROCESS only, not the entire system
         create_temp_table_query = """
             CREATE TABLE IF NOT EXISTS temporary_metrics (
                 id INT AUTO_INCREMENT PRIMARY KEY,
-                cpu_usage DECIMAL(5, 2) NOT NULL COMMENT 'CPU usage percentage',
-                ram_usage DECIMAL(5, 2) NOT NULL COMMENT 'RAM usage percentage',
-                ram_used_mb DECIMAL(10, 2) NOT NULL COMMENT 'RAM used in MB',
-                ram_total_mb DECIMAL(10, 2) NOT NULL COMMENT 'Total RAM in MB',
-                bandwidth_in_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Bandwidth in (MB)',
-                bandwidth_out_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Bandwidth out (MB)',
-                bandwidth_total_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Total bandwidth (MB)',
+                cpu_usage DECIMAL(5, 2) NOT NULL COMMENT 'Application process CPU usage percentage',
+                ram_usage DECIMAL(5, 2) NOT NULL COMMENT 'Application process RAM usage percentage (of system total)',
+                ram_used_mb DECIMAL(10, 2) NOT NULL COMMENT 'Application process RAM used in MB',
+                ram_total_mb DECIMAL(10, 2) NOT NULL COMMENT 'Total system RAM in MB (for percentage calculation)',
+                bandwidth_in_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Application bandwidth in (MB)',
+                bandwidth_out_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Application bandwidth out (MB)',
+                bandwidth_total_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Total application bandwidth (MB)',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 INDEX idx_created_at (created_at),
                 INDEX idx_created_at_desc (created_at DESC)
@@ -2911,32 +3585,41 @@ def collect_metrics():
         ram_used_mb = 0.0
         ram_total_mb = 0.0
         
-        # Try to get CPU and RAM usage with psutil
+        # Try to get CPU and RAM usage for THIS APPLICATION PROCESS ONLY (not system-wide)
         # Handle cases where psutil is not available or fails
         try:
             # Check if psutil is available
             if psutil is None:
                 raise ImportError("psutil module is not available")
             
-            # Get CPU usage - use non-blocking call first, then blocking if needed
+            # Get the current process (this Flask application)
+            current_process = psutil.Process(os.getpid())
+            
+            # Get CPU usage for this process only
             try:
-                # Try non-blocking first (returns immediately with last value)
-                cpu_percent = psutil.cpu_percent(interval=None)
-                if cpu_percent is None or cpu_percent == 0:
-                    # If None or 0, try with a short interval
-                    cpu_percent = psutil.cpu_percent(interval=0.1)
+                # Get CPU usage for this process (percentage of a single CPU core)
+                # If multiprocessor, this can exceed 100% (e.g., 200% = 2 cores at 100%)
+                cpu_percent = current_process.cpu_percent(interval=0.1)
+                if cpu_percent is None:
+                    cpu_percent = 0.0
+                # Normalize to percentage (divide by number of CPU cores to get 0-100%)
+                num_cores = psutil.cpu_count() or 1
+                cpu_percent = min(100.0, (cpu_percent / num_cores) * 100) if num_cores > 0 else cpu_percent
             except Exception as cpu_error:
-                print(f"Warning: Could not get CPU usage: {str(cpu_error)}")
+                print(f"Warning: Could not get process CPU usage: {str(cpu_error)}")
                 cpu_percent = 0.0
             
-            # Get RAM usage
+            # Get RAM usage for this process only
             try:
-                memory = psutil.virtual_memory()
-                ram_percent = memory.percent
-                ram_used_mb = memory.used / (1024 * 1024)
-                ram_total_mb = memory.total / (1024 * 1024)
+                process_memory = current_process.memory_info()
+                ram_used_mb = process_memory.rss / (1024 * 1024)  # RSS = Resident Set Size (actual RAM used)
+                
+                # Get total system RAM to calculate percentage
+                system_memory = psutil.virtual_memory()
+                ram_total_mb = system_memory.total / (1024 * 1024)
+                ram_percent = (ram_used_mb / ram_total_mb * 100) if ram_total_mb > 0 else 0.0
             except Exception as ram_error:
-                print(f"Warning: Could not get RAM usage: {str(ram_error)}")
+                print(f"Warning: Could not get process RAM usage: {str(ram_error)}")
                 ram_percent = 0.0
                 ram_used_mb = 0.0
                 ram_total_mb = 0.0
@@ -3075,6 +3758,131 @@ def collect_metrics():
         return jsonify({
             "success": False,
             "error": "Failed to collect system metrics",
+            "details": str(e)
+        }), 500
+
+@app.route("/api/admin/metrics/collect-app", methods=["POST"])
+def collect_app_metrics():
+    """Collect and store frontend application-specific metrics (CPU, RAM, Bandwidth)"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "success": False,
+                "error": "No data provided"
+            }), 400
+        
+        # Extract metrics from request
+        cpu_usage = float(data.get('cpu_usage', 0))
+        ram_usage = float(data.get('ram_usage', 0))
+        ram_used_mb = float(data.get('ram_used_mb', 0))
+        ram_total_mb = float(data.get('ram_total_mb', 0))
+        bandwidth_in_mb = float(data.get('bandwidth_in_mb', 0))
+        bandwidth_out_mb = float(data.get('bandwidth_out_mb', 0))
+        bandwidth_total_mb = float(data.get('bandwidth_total_mb', 0))
+        
+        # Validate values
+        cpu_usage = max(0, min(100, cpu_usage))
+        ram_usage = max(0, min(100, ram_usage))
+        ram_used_mb = max(0, ram_used_mb)
+        ram_total_mb = max(0, ram_total_mb)
+        bandwidth_in_mb = max(0, bandwidth_in_mb)
+        bandwidth_out_mb = max(0, bandwidth_out_mb)
+        bandwidth_total_mb = max(0, bandwidth_total_mb)
+        
+        # Create application_metrics table if it doesn't exist
+        create_app_metrics_table_query = """
+            CREATE TABLE IF NOT EXISTS application_metrics_frontend (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                cpu_usage DECIMAL(5, 2) NOT NULL COMMENT 'Frontend application CPU usage percentage',
+                ram_usage DECIMAL(5, 2) NOT NULL COMMENT 'Frontend application RAM usage percentage',
+                ram_used_mb DECIMAL(10, 2) NOT NULL COMMENT 'Frontend application RAM used in MB',
+                ram_total_mb DECIMAL(10, 2) NOT NULL COMMENT 'Frontend application total RAM in MB',
+                bandwidth_in_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Frontend application bandwidth in (MB)',
+                bandwidth_out_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Frontend application bandwidth out (MB)',
+                bandwidth_total_mb DECIMAL(10, 2) DEFAULT 0 COMMENT 'Frontend application total bandwidth (MB)',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_created_at (created_at),
+                INDEX idx_created_at_desc (created_at DESC)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+        try:
+            execute_update(create_app_metrics_table_query)
+        except Exception as table_error:
+            print(f"Warning: Could not create application_metrics_frontend table: {str(table_error)}")
+            traceback.print_exc()
+        
+        # Store metrics in database
+        try:
+            insert_query = """
+                INSERT INTO application_metrics_frontend 
+                (cpu_usage, ram_usage, ram_used_mb, ram_total_mb, 
+                 bandwidth_in_mb, bandwidth_out_mb, bandwidth_total_mb)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """
+            execute_update(
+                insert_query,
+                (cpu_usage, ram_usage, ram_used_mb, ram_total_mb,
+                 bandwidth_in_mb, bandwidth_out_mb, bandwidth_total_mb)
+            )
+        except Exception as db_error:
+            error_msg = f"Database error storing frontend application metrics: {str(db_error)}"
+            print(f"Error: {error_msg}")
+            traceback.print_exc()
+            return jsonify({
+                "success": False,
+                "error": "Failed to store metrics in database",
+                "details": str(db_error)
+            }), 500
+        
+        # Cleanup old data (keep only last 1000 records)
+        try:
+            count_query = "SELECT COUNT(*) as total FROM application_metrics_frontend"
+            count_result = execute_query(count_query)
+            total_records = count_result[0]['total'] if count_result else 0
+            
+            if total_records > 1000:
+                keep_ids_query = """
+                    SELECT id FROM application_metrics_frontend 
+                    ORDER BY created_at DESC 
+                    LIMIT 1000
+                """
+                keep_ids = execute_query(keep_ids_query)
+                
+                if keep_ids:
+                    keep_id_list = [row['id'] for row in keep_ids]
+                    if keep_id_list:
+                        placeholders = ','.join(['%s'] * len(keep_id_list))
+                        cleanup_query = f"""
+                            DELETE FROM application_metrics_frontend 
+                            WHERE id NOT IN ({placeholders})
+                        """
+                        execute_update(cleanup_query, tuple(keep_id_list))
+        except Exception as e:
+            print(f"Error cleaning up old application_metrics_frontend: {e}")
+            # Don't fail the whole request if cleanup fails
+        
+        return jsonify({
+            "success": True,
+            "message": "Frontend application metrics collected successfully",
+            "metrics": {
+                "cpu_usage": cpu_usage,
+                "ram_usage": ram_usage,
+                "ram_used_mb": ram_used_mb,
+                "ram_total_mb": ram_total_mb,
+                "bandwidth_in_mb": bandwidth_in_mb,
+                "bandwidth_out_mb": bandwidth_out_mb,
+                "bandwidth_total_mb": bandwidth_total_mb
+            }
+        })
+        
+    except Exception as e:
+        error_msg = f"Error collecting frontend application metrics: {str(e)}"
+        print(f"Error: {error_msg}")
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": "Failed to collect frontend application metrics",
             "details": str(e)
         }), 500
 
@@ -3276,15 +4084,26 @@ def get_current_metrics():
         else:
             # Fallback: Get current metrics without storing (if no data in temporary_metrics)
             try:
-                # Get CPU usage
-                cpu_percent = psutil.cpu_percent(interval=0.1) if psutil else 0.0
-                
-                # Get RAM usage
+                # Get CPU usage for this application process only
                 if psutil:
-                    memory = psutil.virtual_memory()
-                    ram_percent = memory.percent
-                    ram_used_mb = memory.used / (1024 * 1024)
-                    ram_total_mb = memory.total / (1024 * 1024)
+                    current_process = psutil.Process(os.getpid())
+                    cpu_percent = current_process.cpu_percent(interval=0.1)
+                    if cpu_percent is None:
+                        cpu_percent = 0.0
+                    # Normalize to percentage
+                    num_cores = psutil.cpu_count() or 1
+                    cpu_percent = min(100.0, (cpu_percent / num_cores) * 100) if num_cores > 0 else cpu_percent
+                else:
+                    cpu_percent = 0.0
+                
+                # Get RAM usage for this application process only
+                if psutil:
+                    current_process = psutil.Process(os.getpid())
+                    process_memory = current_process.memory_info()
+                    ram_used_mb = process_memory.rss / (1024 * 1024)
+                    system_memory = psutil.virtual_memory()
+                    ram_total_mb = system_memory.total / (1024 * 1024)
+                    ram_percent = (ram_used_mb / ram_total_mb * 100) if ram_total_mb > 0 else 0.0
                 else:
                     ram_percent = 0.0
                     ram_used_mb = 0.0
@@ -3507,20 +4326,47 @@ def serve_image(file_path: str):
         if ".." in file_path or file_path.startswith("/"):
             abort_with_message(400, "Invalid file path")
         
+        # Build the image path
         image_path = FRONTEND_DIR / "images" / file_path
+        
+        # Ensure the images directory exists
+        images_dir = FRONTEND_DIR / "images"
+        if not images_dir.exists():
+            print(f"Images directory does not exist: {images_dir}")
+            abort_with_message(404, "Image not found")
+        
+        # Resolve paths for security check (case-insensitive on Windows)
         try:
-            image_path = image_path.resolve()
-            images_dir = (FRONTEND_DIR / "images").resolve()
-            if not str(image_path).startswith(str(images_dir)):
+            image_path_resolved = image_path.resolve()
+            images_dir_resolved = images_dir.resolve()
+            
+            # Normalize paths for comparison (handle Windows case-insensitivity)
+            image_path_str = str(image_path_resolved).lower()
+            images_dir_str = str(images_dir_resolved).lower()
+            
+            if not image_path_str.startswith(images_dir_str):
                 abort_with_message(403, "Access denied")
         except Exception as e:
             print(f"Error resolving image path: {str(e)}")
             abort_with_message(400, "Invalid file path")
         
-        if image_path.exists() and image_path.is_file():
-            return send_file(str(image_path))
-        abort_with_message(404, "Image not found")
+        # Check if file exists and is a file (not a directory)
+        if not image_path.exists():
+            print(f"Image file does not exist: {image_path}")
+            abort_with_message(404, "Image not found")
+        
+        if not image_path.is_file():
+            print(f"Image path is not a file: {image_path}")
+            abort_with_message(404, "Image not found")
+        
+        # Serve the file
+        return send_file(str(image_path))
     except Exception as e:
+        # Check if this is a Flask/Werkzeug HTTPException (from abort_with_message)
+        from werkzeug.exceptions import HTTPException
+        if isinstance(e, HTTPException):
+            # Re-raise HTTP exceptions (400, 403, 404) to let Flask handle them
+            raise
         print(f"Error serving image: {str(e)}")
         traceback.print_exc()
         abort_with_message(500, f"Error serving image: {str(e)}")
