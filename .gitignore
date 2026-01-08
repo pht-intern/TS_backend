@@ -1,4 +1,4 @@
-.env
+
 requirements.txt
 passenger_wsgi.py
 venv/
