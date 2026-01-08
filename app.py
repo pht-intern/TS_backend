@@ -2882,7 +2882,6 @@ def collect_metrics():
             traceback.print_exc()
             # Continue anyway - table might already exist
         
-<<<<<<< HEAD
         # Create temporary_metrics table if it doesn't exist (temporary storage for stat cards)
         create_temp_table_query = """
             CREATE TABLE IF NOT EXISTS temporary_metrics (
