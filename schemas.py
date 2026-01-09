@@ -13,8 +13,7 @@ from models import (
     Partner, Testimonial, ContactInquiry,
     Blog, User, UserRole,
     VisitorInfo, Log, LogType,
-    SystemMetrics, TemporaryMetrics,
-    CacheLog, CacheOperation, CacheStatus
+    SystemMetrics, TemporaryMetrics
 )
 
 
@@ -774,67 +773,3 @@ class TemporaryMetricsCurrentResponseSchema(BaseModel):
     success: bool
     metrics: Optional[TemporaryMetricsResponseSchema] = None
     message: Optional[str] = None
-
-
-# ============================================
-# CACHE LOG SCHEMAS
-# ============================================
-
-class CacheLogCreateSchema(BaseModel):
-    """Schema for creating a cache log entry"""
-    cache_key: str = Field(..., max_length=500, description="Cache key that was accessed")
-    operation: CacheOperation = Field(..., description="Cache operation: hit, miss, set, delete")
-    cache_type: Optional[str] = Field(None, max_length=50, description="Type of cache: property, partner, testimonial, etc.")
-    response_time_ms: Optional[float] = Field(None, ge=0, description="Response time in milliseconds")
-    cache_size_kb: Optional[float] = Field(None, ge=0, description="Size of cached data in KB")
-    status: CacheStatus = Field(CacheStatus.SUCCESS, description="Operation status: success, error")
-    error_message: Optional[str] = Field(None, description="Error message if operation failed")
-    ip_address: Optional[str] = Field(None, max_length=45, description="IP address of the request")
-    user_agent: Optional[str] = Field(None, description="User agent of the request")
-    metadata: Optional[dict] = Field(None, description="Additional metadata about the cache operation")
-
-
-class CacheLogResponseSchema(BaseModel):
-    """Cache log response schema"""
-    id: int
-    cache_key: str
-    operation: CacheOperation
-    cache_type: Optional[str] = None
-    response_time_ms: Optional[float] = None
-    cache_size_kb: Optional[float] = None
-    status: CacheStatus
-    error_message: Optional[str] = None
-    ip_address: Optional[str] = None
-    user_agent: Optional[str] = None
-    metadata: Optional[dict] = None
-    created_at: datetime
-
-    @field_serializer('created_at')
-    def serialize_datetime(self, value: datetime, _info):
-        return value.isoformat() if value else None
-
-    class Config:
-        from_attributes = True
-        extra = "allow"  # Allow extra fields from database
-
-
-class CacheLogListResponseSchema(BaseModel):
-    """Cache log list response schema with pagination"""
-    success: bool
-    logs: List[CacheLogResponseSchema] = []
-    total: int = 0
-    page: int = 1
-    limit: int = 50
-    pages: int = 0
-    has_more: bool = False
-    message: Optional[str] = None
-
-
-class CacheLogFilterSchema(BaseModel):
-    """Schema for filtering cache logs"""
-    operation: Optional[CacheOperation] = None
-    status: Optional[CacheStatus] = None
-    cache_type: Optional[str] = None
-    search: Optional[str] = None
-    page: int = Field(1, ge=1, description="Page number")
-    limit: int = Field(50, ge=1, le=500, description="Items per page")

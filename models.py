@@ -624,56 +624,6 @@ class Log(LogBase):
 
 
 # ============================================
-# CACHE LOG MODELS
-# ============================================
-
-class CacheOperation(str, Enum):
-    """Cache operation type enum"""
-    HIT = "hit"
-    MISS = "miss"
-    SET = "set"
-    DELETE = "delete"
-
-
-class CacheStatus(str, Enum):
-    """Cache operation status enum"""
-    SUCCESS = "success"
-    ERROR = "error"
-
-
-class CacheLogBase(BaseModel):
-    """Base cache log model"""
-    cache_key: str = Field(..., max_length=500, description="Cache key that was accessed")
-    operation: CacheOperation = Field(..., description="Cache operation: hit, miss, set, delete")
-    cache_type: Optional[str] = Field(None, max_length=50, description="Type of cache: property, partner, testimonial, etc.")
-    response_time_ms: Optional[float] = Field(None, ge=0, description="Response time in milliseconds")
-    cache_size_kb: Optional[float] = Field(None, ge=0, description="Size of cached data in KB")
-    status: CacheStatus = Field(CacheStatus.SUCCESS, description="Operation status: success, error")
-    error_message: Optional[str] = Field(None, description="Error message if operation failed")
-    ip_address: Optional[str] = Field(None, max_length=45, description="IP address of the request")
-    user_agent: Optional[str] = Field(None, description="User agent of the request")
-    metadata: Optional[dict] = Field(None, description="Additional metadata about the cache operation")
-
-
-class CacheLogCreate(CacheLogBase):
-    """Model for creating a new cache log entry"""
-    pass
-
-
-class CacheLog(CacheLogBase):
-    """Complete cache log model"""
-    id: int
-    created_at: datetime
-
-    @field_serializer('created_at')
-    def serialize_datetime(self, value: datetime, _info):
-        return value.isoformat() if value else None
-
-    class Config:
-        from_attributes = True
-
-
-# ============================================
 # HELPER FUNCTIONS
 # ============================================
 
