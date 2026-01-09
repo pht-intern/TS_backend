@@ -835,6 +835,20 @@ def normalize_image_url(url: Optional[str]) -> Optional[str]:
     # If it's already a data URL (base64), return as is
     if url.startswith('data:'):
         return url
+    
+    # Handle server paths that include /public_html/ or /home/ directories
+    # Extract the relative path after /public_html/ or find the last /images/ occurrence
+    if '/public_html/' in url:
+        # Extract path after /public_html/
+        parts = url.split('/public_html/', 1)
+        if len(parts) > 1:
+            url = '/' + parts[1].lstrip('/')
+    elif '/images/' in url:
+        # Find the last occurrence of /images/ to handle cases like /images/home/.../images/logos/...
+        last_images_index = url.rfind('/images/')
+        if last_images_index >= 0:
+            url = url[last_images_index:]
+    
     # If it already starts with /images/ or /frontend/, return as is
     if url.startswith('/images/') or url.startswith('/frontend/'):
         return url
