@@ -1576,50 +1576,140 @@ def get_property(property_id: int):
         property_data['features'] = [dict(feat) for feat in features]
         
         # Normalize data types before schema validation
-        # Ensure area is an integer
-        if 'area' in property_data and property_data['area'] is not None:
-            try:
-                property_data['area'] = int(float(property_data['area']))
-            except (ValueError, TypeError):
-                property_data['area'] = 0
+        # Ensure area is an integer (default to 1 if 0 or None for plot properties)
+        if 'area' in property_data:
+            if property_data['area'] is None:
+                property_data['area'] = 1
+            else:
+                try:
+                    area_val = int(float(property_data['area']))
+                    property_data['area'] = area_val if area_val > 0 else 1
+                except (ValueError, TypeError):
+                    property_data['area'] = 1
+        else:
+            property_data['area'] = 1
         
-        # Ensure bedrooms is an integer
-        if 'bedrooms' in property_data and property_data['bedrooms'] is not None:
-            try:
-                property_data['bedrooms'] = int(property_data['bedrooms'])
-            except (ValueError, TypeError):
+        # Ensure bedrooms is an integer (can be 0 for plot properties)
+        if 'bedrooms' in property_data:
+            if property_data['bedrooms'] is None:
                 property_data['bedrooms'] = 0
+            else:
+                try:
+                    property_data['bedrooms'] = int(property_data['bedrooms'])
+                except (ValueError, TypeError):
+                    property_data['bedrooms'] = 0
+        else:
+            property_data['bedrooms'] = 0
         
-        # Ensure bathrooms is a float
-        if 'bathrooms' in property_data and property_data['bathrooms'] is not None:
-            try:
-                property_data['bathrooms'] = float(property_data['bathrooms'])
-            except (ValueError, TypeError):
+        # Ensure bathrooms is a float (can be 0 for plot properties)
+        if 'bathrooms' in property_data:
+            if property_data['bathrooms'] is None:
                 property_data['bathrooms'] = 0.0
+            else:
+                try:
+                    property_data['bathrooms'] = float(property_data['bathrooms'])
+                except (ValueError, TypeError):
+                    property_data['bathrooms'] = 0.0
+        else:
+            property_data['bathrooms'] = 0.0
         
-        # Ensure price is a float
-        if 'price' in property_data and property_data['price'] is not None:
-            try:
-                property_data['price'] = float(property_data['price'])
-            except (ValueError, TypeError):
-                property_data['price'] = 0.0
+        # Ensure price is a float (must be > 0)
+        if 'price' in property_data:
+            if property_data['price'] is None:
+                property_data['price'] = 1.0
+            else:
+                try:
+                    price_val = float(property_data['price'])
+                    property_data['price'] = price_val if price_val > 0 else 1.0
+                except (ValueError, TypeError):
+                    property_data['price'] = 1.0
+        else:
+            property_data['price'] = 1.0
+        
+        # Ensure required string fields exist
+        if 'title' not in property_data or not property_data.get('title'):
+            property_data['title'] = property_data.get('property_name', 'Untitled Property')
+        if 'location' not in property_data or not property_data.get('location'):
+            property_data['location'] = 'Location not specified'
         
         # Ensure type is lowercase string for enum matching
         if 'type' in property_data and property_data['type']:
             if isinstance(property_data['type'], str):
                 property_data['type'] = property_data['type'].lower()
+        else:
+            # Default to plot if property_category is plot
+            if property_data.get('property_category') == 'plot':
+                property_data['type'] = 'plot'
+            else:
+                property_data['type'] = 'apartment'  # Default fallback
         
         # Ensure status is lowercase string for enum matching
         if 'status' in property_data and property_data['status']:
             if isinstance(property_data['status'], str):
                 property_data['status'] = property_data['status'].lower()
+        else:
+            property_data['status'] = 'sale'  # Default fallback
         
-        response = PropertyResponseSchema(**property_data)
-        return jsonify(response.dict())
+        # Ensure boolean fields exist
+        if 'is_featured' not in property_data:
+            property_data['is_featured'] = False
+        if 'is_active' not in property_data:
+            property_data['is_active'] = True
+        
+        # Ensure datetime fields exist and are proper datetime objects
+        if 'created_at' not in property_data or property_data['created_at'] is None:
+            property_data['created_at'] = datetime.now()
+        elif isinstance(property_data['created_at'], str):
+            try:
+                # Try parsing ISO format first
+                property_data['created_at'] = datetime.fromisoformat(property_data['created_at'].replace('Z', '+00:00'))
+            except:
+                try:
+                    # Try common MySQL datetime format
+                    property_data['created_at'] = datetime.strptime(property_data['created_at'], '%Y-%m-%d %H:%M:%S')
+                except:
+                    property_data['created_at'] = datetime.now()
+        
+        if 'updated_at' not in property_data or property_data['updated_at'] is None:
+            property_data['updated_at'] = property_data.get('created_at', datetime.now())
+        elif isinstance(property_data['updated_at'], str):
+            try:
+                # Try parsing ISO format first
+                property_data['updated_at'] = datetime.fromisoformat(property_data['updated_at'].replace('Z', '+00:00'))
+            except:
+                try:
+                    # Try common MySQL datetime format
+                    property_data['updated_at'] = datetime.strptime(property_data['updated_at'], '%Y-%m-%d %H:%M:%S')
+                except:
+                    property_data['updated_at'] = property_data.get('created_at', datetime.now())
+        
+        # Ensure description exists (can be None)
+        if 'description' not in property_data:
+            property_data['description'] = None
+        
+        # Validate with schema
+        try:
+            response = PropertyResponseSchema(**property_data)
+            return jsonify(response.dict())
+        except ValidationError as ve:
+            # Handle Pydantic validation errors specifically
+            error_details = []
+            for error in ve.errors():
+                field = '.'.join(str(loc) for loc in error.get('loc', []))
+                msg = error.get('msg', '')
+                error_type = error.get('type', '')
+                error_details.append(f"{field}: {msg} (type: {error_type})")
+            error_msg = f"Schema validation error: {', '.join(error_details)}"
+            print(f"Property schema validation failed: {error_msg}")
+            print(f"Property data keys: {list(property_data.keys())}")
+            print(f"Property data sample: {json.dumps({k: str(v)[:100] for k, v in list(property_data.items())[:10]}, default=str)}")
+            traceback.print_exc()
+            abort_with_message(500, f"Error validating property data: {error_msg}")
     except Exception as e:
-        print(f"Error fetching property: {str(e)}")
+        error_msg = str(e)
+        print(f"Error fetching property: {error_msg}")
         traceback.print_exc()
-        abort_with_message(500, f"Error fetching property: {str(e)}")
+        abort_with_message(500, f"Error fetching property: {error_msg}")
 
 
 @app.route("/api/properties", methods=["POST"])
@@ -2156,10 +2246,26 @@ def get_testimonials():
                 print(f"Error converting testimonial {t.get('id', 'unknown')}: {str(schema_error)}")
                 continue
         
-        return jsonify([r.dict() for r in result])
+        data = [r.dict() for r in result]
+        
+        # Check for JSONP callback
+        callback = request.args.get('callback')
+        if callback:
+            # JSONP response
+            response = make_response(f"{callback}({json.dumps(data)});")
+            response.headers['Content-Type'] = 'application/javascript'
+            return response
+        else:
+            # Regular JSON response
+            return jsonify(data)
     except Exception as e:
         print(f"Error fetching testimonials: {str(e)}")
         traceback.print_exc()
+        callback = request.args.get('callback')
+        if callback:
+            response = make_response(f"{callback}([]);")
+            response.headers['Content-Type'] = 'application/javascript'
+            return response
         return jsonify([])
 
 
