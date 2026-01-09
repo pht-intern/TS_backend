@@ -1565,7 +1565,7 @@ def get_property(property_id: int):
                 masterplan_images.append(img_dict)
         
         # Assign to correct fields in property_data
-        property_data['images'] = []  # Empty list - PropertyImageSchema requires is_primary which these images don't have
+        property_data['images'] = []  # Empty list - images field is for legacy property_images table (not used for plot/residential properties)
         property_data['project_images'] = project_images
         property_data['floorplan_images'] = floorplan_images
         property_data['masterplan_images'] = masterplan_images

@@ -102,7 +102,7 @@ class PropertyImageSchema(BaseModel):
     id: int
     image_url: str
     image_order: int
-    is_primary: bool
+    is_primary: bool = False  # Default to False if not provided
     created_at: datetime
 
     @field_serializer('created_at')
