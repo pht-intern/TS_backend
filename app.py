@@ -1575,6 +1575,45 @@ def get_property(property_id: int):
         features = execute_query(features_query, (property_id,))
         property_data['features'] = [dict(feat) for feat in features]
         
+        # Normalize data types before schema validation
+        # Ensure area is an integer
+        if 'area' in property_data and property_data['area'] is not None:
+            try:
+                property_data['area'] = int(float(property_data['area']))
+            except (ValueError, TypeError):
+                property_data['area'] = 0
+        
+        # Ensure bedrooms is an integer
+        if 'bedrooms' in property_data and property_data['bedrooms'] is not None:
+            try:
+                property_data['bedrooms'] = int(property_data['bedrooms'])
+            except (ValueError, TypeError):
+                property_data['bedrooms'] = 0
+        
+        # Ensure bathrooms is a float
+        if 'bathrooms' in property_data and property_data['bathrooms'] is not None:
+            try:
+                property_data['bathrooms'] = float(property_data['bathrooms'])
+            except (ValueError, TypeError):
+                property_data['bathrooms'] = 0.0
+        
+        # Ensure price is a float
+        if 'price' in property_data and property_data['price'] is not None:
+            try:
+                property_data['price'] = float(property_data['price'])
+            except (ValueError, TypeError):
+                property_data['price'] = 0.0
+        
+        # Ensure type is lowercase string for enum matching
+        if 'type' in property_data and property_data['type']:
+            if isinstance(property_data['type'], str):
+                property_data['type'] = property_data['type'].lower()
+        
+        # Ensure status is lowercase string for enum matching
+        if 'status' in property_data and property_data['status']:
+            if isinstance(property_data['status'], str):
+                property_data['status'] = property_data['status'].lower()
+        
         response = PropertyResponseSchema(**property_data)
         return jsonify(response.dict())
     except Exception as e:
