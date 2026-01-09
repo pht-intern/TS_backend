@@ -858,9 +858,40 @@ def normalize_image_url(url: Optional[str]) -> Optional[str]:
 # HELPER FUNCTIONS FOR ERROR HANDLING
 # ============================================
 
+def get_jsonp_callback():
+    """Helper function to get JSONP callback from request"""
+    # Check query params first (for GET requests)
+    callback = request.args.get('callback')
+    # Also check form data (for POST requests with form-encoded data)
+    if not callback and request.form:
+        callback = request.form.get('callback')
+    # Also check JSON body (for POST requests with JSON)
+    if not callback and request.is_json:
+        try:
+            json_data = request.get_json(silent=True)
+            if json_data and isinstance(json_data, dict):
+                callback = json_data.get('callback')
+        except:
+            pass
+    return callback
+
+def make_jsonp_response(data, status_code=200):
+    """Helper function to create JSONP or regular JSON response"""
+    callback = get_jsonp_callback()
+    if callback:
+        # JSONP response
+        response = make_response(f"{callback}({json.dumps(data)});")
+        response.headers['Content-Type'] = 'application/javascript'
+        response.status_code = status_code
+        return response
+    else:
+        # Regular JSON response
+        return jsonify(data), status_code
+
 def abort_with_message(status_code: int, message: str):
     """Helper function to abort with a custom error message"""
-    response = make_response(jsonify({"error": message, "success": False}), status_code)
+    # Note: abort() raises an exception, so JSONP handling is done in error handlers
+    response = make_response(jsonify({"error": message, "success": False, "detail": message}), status_code)
     abort(response)
 
 
@@ -1027,7 +1058,10 @@ def login():
                 "role": user.get('role', 'admin')
             }
         )
-        return jsonify(response_data.model_dump())
+        
+        # Use helper function for JSONP support (for consistency with other endpoints)
+        # Note: JSONP typically works with GET, but we support the format for POST too
+        return make_jsonp_response(response_data.model_dump(), 200)
     except RuntimeError as e:
         # Database connection errors
         error_msg = str(e)
@@ -5067,13 +5101,29 @@ def import_table_from_csv(table_name: str):
 @app.errorhandler(401)
 def unauthorized(error):
     """Handle 401 errors"""
-    return jsonify({"error": "Unauthorized", "success": False}), 401
+    error_msg = "Unauthorized"
+    if hasattr(error, 'response') and hasattr(error.response, 'data'):
+        try:
+            error_data = json.loads(error.response.data)
+            if isinstance(error_data, dict) and 'error' in error_data:
+                error_msg = error_data['error']
+        except:
+            pass
+    return make_jsonp_response({"error": error_msg, "success": False}, 401)
 
 
 @app.errorhandler(403)
 def forbidden(error):
     """Handle 403 errors"""
-    return jsonify({"error": "Forbidden", "success": False}), 403
+    error_msg = "Forbidden"
+    if hasattr(error, 'response') and hasattr(error.response, 'data'):
+        try:
+            error_data = json.loads(error.response.data)
+            if isinstance(error_data, dict) and 'error' in error_data:
+                error_msg = error_data['error']
+        except:
+            pass
+    return make_jsonp_response({"error": error_msg, "success": False}, 403)
 
 
 @app.errorhandler(404)
@@ -5090,7 +5140,7 @@ def not_found(error):
                 error_msg = error_data['error']
         except:
             pass
-    return jsonify({"error": error_msg, "success": False}), 404
+    return make_jsonp_response({"error": error_msg, "success": False}, 404)
 
 
 @app.errorhandler(400)
@@ -5104,7 +5154,7 @@ def bad_request(error):
                 error_msg = error_data['error']
         except:
             pass
-    return jsonify({"error": error_msg, "success": False}), 400
+    return make_jsonp_response({"error": error_msg, "success": False}, 400)
 
 
 @app.errorhandler(500)
@@ -5118,7 +5168,7 @@ def internal_error(error):
                 error_msg = error_data['error']
         except:
             pass
-    return jsonify({"error": error_msg, "success": False}), 500
+    return make_jsonp_response({"error": error_msg, "success": False}, 500)
 
 
 @app.errorhandler(Exception)
@@ -5135,7 +5185,8 @@ def handle_exception(e):
     
     # Don't expose internal error details in production
     error_detail = str(e) if DEBUG_MODE else "An internal error occurred. Please contact support."
-    return jsonify({"error": "Internal server error", "detail": error_detail, "success": False}), 500
+    error_data = {"error": "Internal server error", "detail": error_detail, "success": False}
+    return make_jsonp_response(error_data, 500)
 
 
 # ============================================
