@@ -2937,6 +2937,34 @@ def delete_blog(blog_id: int):
         abort_with_message(500, f"Error deleting blog: {str(e)}")
 
 
+@app.route("/api/blogs/<int:blog_id>/increment-views", methods=["POST"])
+def increment_blog_views(blog_id: int):
+    """Increment blog views count (public endpoint, no auth required)"""
+    try:
+        # Check if blog exists
+        existing = execute_query("SELECT id, views FROM blogs WHERE id = %s", (blog_id,))
+        if not existing:
+            abort_with_message(404, "Blog not found")
+        
+        # Increment views atomically
+        update_query = "UPDATE blogs SET views = views + 1 WHERE id = %s"
+        execute_update(update_query, (blog_id,))
+        
+        # Get updated views count
+        blog_data = execute_query("SELECT views FROM blogs WHERE id = %s", (blog_id,))
+        updated_views = blog_data[0]['views'] if blog_data else 0
+        
+        return jsonify({
+            "success": True,
+            "blog_id": blog_id,
+            "views": updated_views
+        })
+    except Exception as e:
+        print(f"Error incrementing blog views: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error incrementing blog views: {str(e)}")
+
+
 # ============================================
 # ROUTES - CONTACT INQUIRIES
 # ============================================
