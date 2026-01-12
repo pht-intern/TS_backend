@@ -1018,6 +1018,32 @@ def login():
             print(f"Warning: Failed to update last_login timestamp: {str(update_error)}")
             # Continue with login even if timestamp update fails
         
+        # Log successful login to activity logs
+        try:
+            ip_address = get_client_ip()
+            user_agent = request.headers.get("User-Agent", None)
+            login_log_query = "INSERT INTO logs (log_type, action, description, user_email, ip_address, user_agent, metadata) VALUES (%s, %s, %s, %s, %s, %s, %s)"
+            login_metadata = {
+                "login_timestamp": datetime.now().isoformat(),
+                "user_id": user['id'],
+                "user_role": user.get('role', 'admin'),
+                "login_method": "email_password"
+            }
+            login_metadata_json = json.dumps(login_metadata)
+            with get_db_cursor() as cursor:
+                cursor.execute(login_log_query, (
+                    'action',
+                    'user_login',
+                    f"User logged in: {user['email']}",
+                    user['email'],
+                    ip_address,
+                    user_agent,
+                    login_metadata_json
+                ))
+        except Exception as log_error:
+            # Don't fail login if logging fails
+            print(f"Warning: Failed to log login activity: {str(log_error)}")
+        
         response_data = LoginResponseSchema(
             success=True,
             message="Login successful",
@@ -1249,13 +1275,15 @@ def get_properties():
         residential_query = f"""
             SELECT 
                 id, city, locality, property_name as title, property_name, 
-                unit_type, bedrooms, buildup_area as area, buildup_area, carpet_area, 
-                price, price_text, price_negotiable, price_includes_registration,
+                unit_type, bedrooms, bathrooms, buildup_area as area, buildup_area, carpet_area, 
+                super_built_up_area, price, price_text, price_negotiable, price_includes_registration,
                 type, status, property_status, description,
+                location_link, directions, length, breadth,
+                builder, configuration, total_flats, total_floors, total_acres,
                 is_featured, is_active, created_at, updated_at,
                 'residential' as property_category,
                 NULL as plot_area, NULL as plot_length, NULL as plot_breadth,
-                NULL as project_name, 0 as bathrooms
+                NULL as project_name
             FROM residential_properties
             WHERE {residential_where}
             ORDER BY created_at DESC
@@ -1268,13 +1296,15 @@ def get_properties():
             plot_query = f"""
                 SELECT 
                     id, city, locality, project_name as title, project_name as property_name,
-                    NULL as unit_type, 0 as bedrooms, plot_area as area, NULL as buildup_area, NULL as carpet_area,
-                    price, price_text, price_negotiable, price_includes_registration,
+                    NULL as unit_type, 0 as bedrooms, 0 as bathrooms, plot_area as area, NULL as buildup_area, NULL as carpet_area,
+                    NULL as super_built_up_area, price, price_text, price_negotiable, price_includes_registration,
                     'plot' as type, status, property_status, description,
+                    location_link, directions, NULL as length, NULL as breadth,
+                    builder, NULL as configuration, NULL as total_flats, NULL as total_floors, total_acres,
                     is_featured, is_active, created_at, updated_at,
                     'plot' as property_category,
                     plot_area, plot_length, plot_breadth,
-                    project_name, 0 as bathrooms
+                    project_name
                 FROM plot_properties
                 WHERE {plot_where}
                 ORDER BY created_at DESC
@@ -1401,6 +1431,31 @@ def get_properties():
             if 'images' not in prop_dict:
                 prop_dict['images'] = []
             
+            # Construct location from city and locality if not already present
+            if 'location' not in prop_dict or not prop_dict.get('location'):
+                city = prop_dict.get('city', '')
+                locality = prop_dict.get('locality', '')
+                if city and locality:
+                    prop_dict['location'] = f"{city}, {locality}"
+                elif city:
+                    prop_dict['location'] = city
+                elif locality:
+                    prop_dict['location'] = locality
+                else:
+                    prop_dict['location'] = 'Location not specified'
+            
+            # Convert TINYINT(1) to boolean for price_negotiable and price_includes_registration
+            if 'price_negotiable' in prop_dict:
+                prop_dict['price_negotiable'] = bool(prop_dict['price_negotiable'])
+            if 'price_includes_registration' in prop_dict:
+                prop_dict['price_includes_registration'] = bool(prop_dict['price_includes_registration'])
+            
+            # Convert numeric fields to proper types
+            if 'bathrooms' in prop_dict and prop_dict['bathrooms'] is not None:
+                prop_dict['bathrooms'] = float(prop_dict['bathrooms'])
+            if 'area' in prop_dict and prop_dict['area'] is not None:
+                prop_dict['area'] = int(float(prop_dict['area']))
+            
             normalized_properties.append(prop_dict)
         
         response = PaginatedResponse(
@@ -1460,13 +1515,15 @@ def get_property(property_id: int):
         residential_query = """
             SELECT 
                 id, city, locality, property_name as title, property_name, 
-                unit_type, bedrooms, buildup_area as area, buildup_area, carpet_area, 
-                price, price_text, price_negotiable, price_includes_registration,
+                unit_type, bedrooms, bathrooms, buildup_area as area, buildup_area, carpet_area, 
+                super_built_up_area, price, price_text, price_negotiable, price_includes_registration,
                 type, status, property_status, description,
+                location_link, directions, length, breadth,
+                builder, configuration, total_flats, total_floors, total_acres,
                 is_featured, is_active, created_at, updated_at,
                 'residential' as property_category,
                 NULL as plot_area, NULL as plot_length, NULL as plot_breadth,
-                NULL as project_name, 0 as bathrooms
+                NULL as project_name
             FROM residential_properties
             WHERE id = %s
         """
@@ -1479,13 +1536,15 @@ def get_property(property_id: int):
             plot_query = """
                 SELECT 
                     id, city, locality, project_name as title, project_name as property_name,
-                    NULL as unit_type, 0 as bedrooms, plot_area as area, NULL as buildup_area, NULL as carpet_area,
-                    price, price_text, price_negotiable, price_includes_registration,
+                    NULL as unit_type, 0 as bedrooms, 0 as bathrooms, plot_area as area, NULL as buildup_area, NULL as carpet_area,
+                    NULL as super_built_up_area, price, price_text, price_negotiable, price_includes_registration,
                     'plot' as type, status, property_status, description,
+                    location_link, directions, NULL as length, NULL as breadth,
+                    builder, NULL as configuration, NULL as total_flats, NULL as total_floors, total_acres,
                     is_featured, is_active, created_at, updated_at,
                     'plot' as property_category,
                     plot_area, plot_length, plot_breadth,
-                    project_name, 0 as bathrooms
+                    project_name
                 FROM plot_properties
                 WHERE id = %s
             """
@@ -1577,6 +1636,22 @@ def get_property(property_id: int):
         features = execute_query(features_query, (property_id,))
         property_data['features'] = [dict(feat) for feat in features]
         
+        # Convert TINYINT(1) to boolean for price_negotiable and price_includes_registration
+        if 'price_negotiable' in property_data:
+            property_data['price_negotiable'] = bool(property_data['price_negotiable'])
+        if 'price_includes_registration' in property_data:
+            property_data['price_includes_registration'] = bool(property_data['price_includes_registration'])
+        
+        # Convert numeric fields to proper types
+        if 'bathrooms' in property_data and property_data['bathrooms'] is not None:
+            property_data['bathrooms'] = float(property_data['bathrooms'])
+        if 'area' in property_data and property_data['area'] is not None:
+            property_data['area'] = int(float(property_data['area']))
+        
+        # Note: listing_type, video_link, and direction are not in the current database schema
+        # They will be added as NULL if not present, which is fine for the schema (all optional)
+        # These fields can be added to the database schema in a future migration if needed
+        
         response = PropertyResponseSchema(**property_data)
         return jsonify(response.dict())
     except Exception as e:
@@ -1619,7 +1694,21 @@ def create_residential_property():
         if status not in ['sale', 'rent', 'resale', 'new']:
             abort_with_message(400, f"Invalid status value: {status}. Must be one of: sale, rent, resale, new")
         property_status = data.get('property_status')
+        listing_type = data.get('listing_type')  # new, resell (not in DB schema yet)
         description = data.get('description')
+        location_link = data.get('location_link')
+        directions = data.get('directions')
+        length = data.get('length')
+        breadth = data.get('breadth')
+        bathrooms = float(data.get('bathrooms', 0))
+        super_built_up_area = data.get('super_built_up_area')
+        builder = data.get('builder')
+        configuration = data.get('configuration')
+        total_flats = data.get('total_flats')
+        total_floors = data.get('total_floors')
+        total_acres = data.get('total_acres')
+        video_link = data.get('video_link')  # Not in DB schema yet
+        direction = data.get('direction')  # Property facing (not in DB schema yet)
         is_featured = 1 if data.get('is_featured') else 0
         is_active = 1 if data.get('is_active', True) else 0
         images = data.get('images', [])
@@ -1630,18 +1719,22 @@ def create_residential_property():
         
         insert_query = """
             INSERT INTO residential_properties (
-                city, locality, property_name, unit_type, bedrooms, buildup_area, carpet_area,
-                price, price_text, price_negotiable, price_includes_registration,
+                city, locality, property_name, unit_type, bedrooms, bathrooms, buildup_area, carpet_area,
+                super_built_up_area, price, price_text, price_negotiable, price_includes_registration,
                 type, status, property_status, description,
+                location_link, directions, length, breadth,
+                builder, configuration, total_flats, total_floors, total_acres,
                 is_featured, is_active
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         
         with get_db_cursor() as cursor:
             cursor.execute(insert_query, (
-                city, locality, property_name, unit_type, bedrooms, buildup_area, carpet_area,
-                price, price_text, price_negotiable, price_includes_registration,
+                city, locality, property_name, unit_type, bedrooms, bathrooms, buildup_area, carpet_area,
+                super_built_up_area, price, price_text, price_negotiable, price_includes_registration,
                 property_type, status, property_status, description,
+                location_link, directions, length, breadth,
+                builder, configuration, total_flats, total_floors, total_acres,
                 is_featured, is_active
             ))
             property_id = cursor.lastrowid
@@ -1691,7 +1784,14 @@ def create_plot_property():
         if status not in ['sale', 'rent', 'resale', 'new']:
             abort_with_message(400, f"Invalid status value: {status}. Must be one of: sale, rent, resale, new")
         property_status = data.get('property_status')
+        listing_type = data.get('listing_type')  # new, resell (not in DB schema yet)
         description = data.get('description')
+        location_link = data.get('location_link')
+        directions = data.get('directions')
+        builder = data.get('builder')
+        total_acres = data.get('total_acres')
+        video_link = data.get('video_link')  # Not in DB schema yet
+        direction = data.get('direction')  # Property facing (not in DB schema yet)
         is_featured = 1 if data.get('is_featured') else 0
         is_active = 1 if data.get('is_active', True) else 0
         images = data.get('images', [])
@@ -1705,8 +1805,9 @@ def create_plot_property():
                 city, locality, project_name, plot_area, plot_length, plot_breadth,
                 price, price_text, price_negotiable, price_includes_registration,
                 status, property_status, description,
+                location_link, directions, builder, total_acres,
                 is_featured, is_active
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         
         with get_db_cursor() as cursor:
@@ -1714,6 +1815,7 @@ def create_plot_property():
                 city, locality, project_name, plot_area, plot_length, plot_breadth,
                 price, price_text, price_negotiable, price_includes_registration,
                 status, property_status, description,
+                location_link, directions, builder, total_acres,
                 is_featured, is_active
             ))
             property_id = cursor.lastrowid
@@ -2749,6 +2851,94 @@ def create_cache_log():
         return jsonify(response.dict())
     except Exception:
         return jsonify({"success": True, "message": "Cache log created"})
+
+
+@app.route("/api/admin/app-metrics/verify-password", methods=["POST"])
+def verify_app_metrics_password():
+    """Verify password for app-metrics page access"""
+    try:
+        data = request.get_json()
+        if not data or 'password' not in data:
+            return jsonify({"success": False, "message": "Password is required"}), 400
+        
+        password = data.get('password', '').strip()
+        if not password:
+            return jsonify({"success": False, "message": "Password is required"}), 400
+        
+        # Get password hash from database
+        query = "SELECT password_hash FROM app_metrics_password ORDER BY id DESC LIMIT 1"
+        results = execute_query(query)
+        
+        if not results or len(results) == 0:
+            return jsonify({"success": False, "message": "Password not set. Please set a password first."}), 404
+        
+        password_hash = results[0].get('password_hash')
+        if not password_hash:
+            return jsonify({"success": False, "message": "Password not set. Please set a password first."}), 404
+        
+        # Debug logging (remove in production if needed)
+        print(f"Debug: Attempting to verify password. Hash from DB: {password_hash[:20]}...")
+        print(f"Debug: Password length: {len(password)}")
+        
+        # Verify password
+        try:
+            is_valid = verify_password(password, password_hash)
+            print(f"Debug: Password verification result: {is_valid}")
+            
+            if is_valid:
+                return jsonify({"success": True, "message": "Password verified"}), 200
+            else:
+                return jsonify({"success": False, "message": "Invalid password"}), 401
+        except Exception as verify_error:
+            print(f"Debug: Password verification error: {str(verify_error)}")
+            print(f"Debug: Hash format check - starts with $2b$: {password_hash.startswith('$2b$')}")
+            traceback.print_exc()
+            return jsonify({"success": False, "message": f"Error during password verification: {str(verify_error)}"}), 500
+            
+    except Exception as e:
+        print(f"Error verifying app-metrics password: {str(e)}")
+        traceback.print_exc()
+        return jsonify({"success": False, "message": f"Error verifying password: {str(e)}"}), 500
+
+
+@app.route("/api/admin/app-metrics/set-password", methods=["POST"])
+@require_admin_auth
+def set_app_metrics_password():
+    """Set password for app-metrics page access (admin only)"""
+    try:
+        data = request.get_json()
+        if not data or 'password' not in data:
+            return jsonify({"success": False, "message": "Password is required"}), 400
+        
+        password = data.get('password', '').strip()
+        if not password:
+            return jsonify({"success": False, "message": "Password is required"}), 400
+        
+        if len(password) < 4:
+            return jsonify({"success": False, "message": "Password must be at least 4 characters"}), 400
+        
+        # Hash the password
+        password_hash = get_password_hash(password)
+        
+        # Check if password already exists
+        check_query = "SELECT id FROM app_metrics_password ORDER BY id DESC LIMIT 1"
+        existing = execute_query(check_query)
+        
+        if existing and len(existing) > 0:
+            # Update existing password
+            update_query = "UPDATE app_metrics_password SET password_hash = %s, updated_at = NOW() WHERE id = %s"
+            execute_update(update_query, (password_hash, existing[0]['id']))
+            return jsonify({"success": True, "message": "Password updated successfully"}), 200
+        else:
+            # Insert new password
+            insert_query = "INSERT INTO app_metrics_password (password_hash) VALUES (%s)"
+            execute_insert(insert_query, (password_hash,))
+            return jsonify({"success": True, "message": "Password set successfully"}), 201
+            
+    except Exception as e:
+        print(f"Error setting app-metrics password: {str(e)}")
+        traceback.print_exc()
+        return jsonify({"success": False, "message": "Error setting password"}), 500
 
 
 @app.route("/api/admin/application-metrics", methods=["GET"])
@@ -4251,6 +4441,423 @@ def get_dashboard_stats():
         abort_with_message(500, f"Error fetching dashboard stats: {str(e)}")
 
 
+@app.route("/api/admin/stats/page-visits", methods=["GET"])
+@require_admin_auth
+def get_page_visit_stats():
+    """Get page visit counts grouped by page name (admin endpoint)"""
+    try:
+        # Extract page name from description field
+        # Description format: "Page viewed: Homepage" or "User email@example.com viewed: Homepage"
+        query = """
+            SELECT 
+                CASE 
+                    WHEN description LIKE '% viewed: %' THEN 
+                        TRIM(SUBSTRING(description, LOCATE('viewed: ', description) + 8))
+                    WHEN description LIKE 'Page viewed: %' THEN 
+                        TRIM(SUBSTRING(description, LOCATE('Page viewed: ', description) + 14))
+                    ELSE 
+                        COALESCE(description, 'Unknown Page')
+                END as page_name,
+                COUNT(*) as visit_count,
+                COUNT(DISTINCT ip_address) as unique_visitors,
+                COUNT(DISTINCT CASE WHEN user_email IS NOT NULL THEN user_email END) as authenticated_visitors
+            FROM logs
+            WHERE action = 'page_view'
+            GROUP BY page_name
+            ORDER BY visit_count DESC
+        """
+        
+        results = execute_query(query)
+        
+        page_visits = []
+        if results:
+            for row in results:
+                page_visits.append({
+                    'page_name': row.get('page_name', 'Unknown'),
+                    'visit_count': int(row.get('visit_count', 0)),
+                    'unique_visitors': int(row.get('unique_visitors', 0)),
+                    'authenticated_visitors': int(row.get('authenticated_visitors', 0))
+                })
+        
+        return jsonify({
+            'page_visits': page_visits,
+            'total_visits': sum(p['visit_count'] for p in page_visits),
+            'total_pages': len(page_visits)
+        })
+    except Exception as e:
+        print(f"Error fetching page visit stats: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error fetching page visit stats: {str(e)}")
+
+
+# ============================================
+# ROUTES - ADMIN SETTINGS (Cities, Categories, Unit Types)
+# ============================================
+
+@app.route("/api/admin/cities", methods=["GET"])
+@require_admin_auth
+def get_cities():
+    """Get all cities with their activation status and property counts"""
+    try:
+        query = """
+            SELECT 
+                c.id,
+                c.name,
+                c.state,
+                c.is_active,
+                COALESCE(COUNT(DISTINCT rp.id), 0) + COALESCE(COUNT(DISTINCT pp.id), 0) as properties_count
+            FROM cities c
+            LEFT JOIN residential_properties rp ON rp.city = c.name AND rp.is_active = 1
+            LEFT JOIN plot_properties pp ON pp.city = c.name AND pp.is_active = 1
+            GROUP BY c.id, c.name, c.state, c.is_active
+            ORDER BY c.state, c.name
+        """
+        cities = execute_query(query)
+        return jsonify({
+            "success": True,
+            "cities": cities or []
+        })
+    except Exception as e:
+        print(f"Error fetching cities: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error fetching cities: {str(e)}")
+
+
+@app.route("/api/admin/cities/bulk", methods=["POST"])
+@require_admin_auth
+def bulk_update_cities():
+    """Bulk update cities (create or update)"""
+    try:
+        data = request.get_json()
+        if not data or 'cities' not in data:
+            abort_with_message(400, "Invalid request data. Expected 'cities' array.")
+        
+        cities = data['cities']
+        if not isinstance(cities, list):
+            abort_with_message(400, "Cities must be an array")
+        
+        with get_db_cursor() as cursor:
+            for city_data in cities:
+                name = city_data.get('name', '').strip()
+                state = city_data.get('state', '').strip()
+                is_active = 1 if city_data.get('is_active', False) else 0
+                
+                if not name or not state:
+                    continue
+                
+                # Insert or update city
+                query = """
+                    INSERT INTO cities (name, state, is_active)
+                    VALUES (%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        is_active = VALUES(is_active),
+                        updated_at = CURRENT_TIMESTAMP
+                """
+                cursor.execute(query, (name, state, is_active))
+        
+        return jsonify({
+            "success": True,
+            "message": f"Successfully updated {len(cities)} cities"
+        })
+    except Exception as e:
+        print(f"Error bulk updating cities: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error updating cities: {str(e)}")
+
+
+@app.route("/api/admin/categories", methods=["GET"])
+@require_admin_auth
+def get_categories():
+    """Get all categories with property counts"""
+    try:
+        query = """
+            SELECT 
+                c.id,
+                c.name,
+                c.display_name,
+                c.is_active,
+                CASE 
+                    WHEN c.name = 'residential' THEN 
+                        (SELECT COUNT(*) FROM residential_properties WHERE is_active = 1)
+                    WHEN c.name = 'plot' THEN 
+                        (SELECT COUNT(*) FROM plot_properties WHERE is_active = 1)
+                    ELSE 0
+                END as properties_count
+            FROM categories c
+            ORDER BY c.name
+        """
+        categories = execute_query(query)
+        return jsonify({
+            "success": True,
+            "categories": categories or []
+        })
+    except Exception as e:
+        print(f"Error fetching categories: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error fetching categories: {str(e)}")
+
+
+@app.route("/api/admin/categories", methods=["POST"])
+@require_admin_auth
+def create_category():
+    """Create a new category"""
+    try:
+        data = request.get_json()
+        if not data:
+            abort_with_message(400, "Invalid request data")
+        
+        name = data.get('name', '').strip()
+        display_name = data.get('display_name', '').strip()
+        is_active = 1 if data.get('is_active', True) else 0
+        
+        if not name or not display_name:
+            abort_with_message(400, "Name and display_name are required")
+        
+        query = "INSERT INTO categories (name, display_name, is_active) VALUES (%s, %s, %s)"
+        with get_db_cursor() as cursor:
+            cursor.execute(query, (name, display_name, is_active))
+            category_id = cursor.lastrowid
+        
+        return jsonify({
+            "success": True,
+            "message": "Category created successfully",
+            "category": {
+                "id": category_id,
+                "name": name,
+                "display_name": display_name,
+                "is_active": bool(is_active)
+            }
+        })
+    except Exception as e:
+        error_msg = str(e)
+        if "Duplicate entry" in error_msg or "UNIQUE constraint" in error_msg:
+            abort_with_message(400, "Category with this name already exists")
+        print(f"Error creating category: {error_msg}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error creating category: {error_msg}")
+
+
+@app.route("/api/admin/categories/<int:category_id>", methods=["GET"])
+@require_admin_auth
+def get_category(category_id):
+    """Get a single category by ID"""
+    try:
+        query = "SELECT id, name, display_name, is_active FROM categories WHERE id = %s"
+        result = execute_query(query, (category_id,))
+        if not result:
+            abort_with_message(404, "Category not found")
+        
+        return jsonify({
+            "success": True,
+            "category": result[0]
+        })
+    except Exception as e:
+        print(f"Error fetching category: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error fetching category: {str(e)}")
+
+
+@app.route("/api/admin/categories/<int:category_id>", methods=["PUT"])
+@require_admin_auth
+def update_category(category_id):
+    """Update a category"""
+    try:
+        data = request.get_json()
+        if not data:
+            abort_with_message(400, "Invalid request data")
+        
+        display_name = data.get('display_name', '').strip()
+        is_active = 1 if data.get('is_active', True) else 0
+        
+        if not display_name:
+            abort_with_message(400, "display_name is required")
+        
+        query = "UPDATE categories SET display_name = %s, is_active = %s WHERE id = %s"
+        with get_db_cursor() as cursor:
+            cursor.execute(query, (display_name, is_active, category_id))
+            if cursor.rowcount == 0:
+                abort_with_message(404, "Category not found")
+        
+        return jsonify({
+            "success": True,
+            "message": "Category updated successfully"
+        })
+    except Exception as e:
+        print(f"Error updating category: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error updating category: {str(e)}")
+
+
+@app.route("/api/admin/categories/<int:category_id>", methods=["DELETE"])
+@require_admin_auth
+def delete_category(category_id):
+    """Delete a category"""
+    try:
+        query = "DELETE FROM categories WHERE id = %s"
+        with get_db_cursor() as cursor:
+            cursor.execute(query, (category_id,))
+            if cursor.rowcount == 0:
+                abort_with_message(404, "Category not found")
+        
+        return jsonify({
+            "success": True,
+            "message": "Category deleted successfully"
+        })
+    except Exception as e:
+        print(f"Error deleting category: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error deleting category: {str(e)}")
+
+
+@app.route("/api/admin/unit-types", methods=["GET"])
+@require_admin_auth
+def get_unit_types():
+    """Get all unit types with property counts"""
+    try:
+        query = """
+            SELECT 
+                ut.id,
+                ut.name,
+                ut.display_name,
+                ut.bedrooms,
+                ut.is_active,
+                (SELECT COUNT(*) FROM residential_properties 
+                 WHERE unit_type = ut.name AND is_active = 1) as properties_count
+            FROM unit_types ut
+            ORDER BY ut.bedrooms, ut.name
+        """
+        unit_types = execute_query(query)
+        return jsonify({
+            "success": True,
+            "unit_types": unit_types or []
+        })
+    except Exception as e:
+        print(f"Error fetching unit types: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error fetching unit types: {str(e)}")
+
+
+@app.route("/api/admin/unit-types", methods=["POST"])
+@require_admin_auth
+def create_unit_type():
+    """Create a new unit type"""
+    try:
+        data = request.get_json()
+        if not data:
+            abort_with_message(400, "Invalid request data")
+        
+        name = data.get('name', '').strip()
+        display_name = data.get('display_name', '').strip()
+        bedrooms = int(data.get('bedrooms', 0))
+        is_active = 1 if data.get('is_active', True) else 0
+        
+        if not name or not display_name:
+            abort_with_message(400, "Name and display_name are required")
+        
+        if bedrooms < 0:
+            abort_with_message(400, "Bedrooms must be a non-negative integer")
+        
+        query = "INSERT INTO unit_types (name, display_name, bedrooms, is_active) VALUES (%s, %s, %s, %s)"
+        with get_db_cursor() as cursor:
+            cursor.execute(query, (name, display_name, bedrooms, is_active))
+            unit_type_id = cursor.lastrowid
+        
+        return jsonify({
+            "success": True,
+            "message": "Unit type created successfully",
+            "unit_type": {
+                "id": unit_type_id,
+                "name": name,
+                "display_name": display_name,
+                "bedrooms": bedrooms,
+                "is_active": bool(is_active)
+            }
+        })
+    except Exception as e:
+        error_msg = str(e)
+        if "Duplicate entry" in error_msg or "UNIQUE constraint" in error_msg:
+            abort_with_message(400, "Unit type with this name already exists")
+        print(f"Error creating unit type: {error_msg}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error creating unit type: {error_msg}")
+
+
+@app.route("/api/admin/unit-types/<int:unit_type_id>", methods=["GET"])
+@require_admin_auth
+def get_unit_type(unit_type_id):
+    """Get a single unit type by ID"""
+    try:
+        query = "SELECT id, name, display_name, bedrooms, is_active FROM unit_types WHERE id = %s"
+        result = execute_query(query, (unit_type_id,))
+        if not result:
+            abort_with_message(404, "Unit type not found")
+        
+        return jsonify({
+            "success": True,
+            "unit_type": result[0]
+        })
+    except Exception as e:
+        print(f"Error fetching unit type: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error fetching unit type: {str(e)}")
+
+
+@app.route("/api/admin/unit-types/<int:unit_type_id>", methods=["PUT"])
+@require_admin_auth
+def update_unit_type(unit_type_id):
+    """Update a unit type"""
+    try:
+        data = request.get_json()
+        if not data:
+            abort_with_message(400, "Invalid request data")
+        
+        display_name = data.get('display_name', '').strip()
+        bedrooms = int(data.get('bedrooms', 0))
+        is_active = 1 if data.get('is_active', True) else 0
+        
+        if not display_name:
+            abort_with_message(400, "display_name is required")
+        
+        if bedrooms < 0:
+            abort_with_message(400, "Bedrooms must be a non-negative integer")
+        
+        query = "UPDATE unit_types SET display_name = %s, bedrooms = %s, is_active = %s WHERE id = %s"
+        with get_db_cursor() as cursor:
+            cursor.execute(query, (display_name, bedrooms, is_active, unit_type_id))
+            if cursor.rowcount == 0:
+                abort_with_message(404, "Unit type not found")
+        
+        return jsonify({
+            "success": True,
+            "message": "Unit type updated successfully"
+        })
+    except Exception as e:
+        print(f"Error updating unit type: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error updating unit type: {str(e)}")
+
+
+@app.route("/api/admin/unit-types/<int:unit_type_id>", methods=["DELETE"])
+@require_admin_auth
+def delete_unit_type(unit_type_id):
+    """Delete a unit type"""
+    try:
+        query = "DELETE FROM unit_types WHERE id = %s"
+        with get_db_cursor() as cursor:
+            cursor.execute(query, (unit_type_id,))
+            if cursor.rowcount == 0:
+                abort_with_message(404, "Unit type not found")
+        
+        return jsonify({
+            "success": True,
+            "message": "Unit type deleted successfully"
+        })
+    except Exception as e:
+        print(f"Error deleting unit type: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error deleting unit type: {str(e)}")
+
+
 # ============================================
 # ROUTES - STATIC FILES
 # ============================================
@@ -4681,6 +5288,51 @@ def nri_property_investment_page_html():
     nri_path = FRONTEND_DIR / "nri-property-investment.html"
     if nri_path.exists():
         return send_file(str(nri_path))
+    abort_with_message(404, "Page not found")
+
+
+@app.route("/app-metrics.html", methods=["GET"])
+def app_metrics_page_html():
+    """Serve the application metrics page (with .html extension)"""
+    metrics_path = FRONTEND_DIR / "app-metrics.html"
+    if metrics_path.exists():
+        return send_file(str(metrics_path))
+    abort_with_message(404, "Page not found")
+
+
+@app.route("/settings", methods=["GET"])
+def settings_page():
+    """Serve the settings page"""
+    settings_path = FRONTEND_DIR / "settings.html"
+    if settings_path.exists():
+        return send_file(str(settings_path))
+    abort_with_message(404, "Page not found")
+
+
+@app.route("/settings.html", methods=["GET"])
+def settings_page_html():
+    """Serve the settings page (with .html extension)"""
+    settings_path = FRONTEND_DIR / "settings.html"
+    if settings_path.exists():
+        return send_file(str(settings_path))
+    abort_with_message(404, "Page not found")
+
+
+@app.route("/activity-logs", methods=["GET"])
+def activity_logs_page():
+    """Serve the activity logs page"""
+    activity_logs_path = FRONTEND_DIR / "activity-logs.html"
+    if activity_logs_path.exists():
+        return send_file(str(activity_logs_path))
+    abort_with_message(404, "Page not found")
+
+
+@app.route("/activity-logs.html", methods=["GET"])
+def activity_logs_page_html():
+    """Serve the activity logs page (with .html extension)"""
+    activity_logs_path = FRONTEND_DIR / "activity-logs.html"
+    if activity_logs_path.exists():
+        return send_file(str(activity_logs_path))
     abort_with_message(404, "Page not found")
 
 

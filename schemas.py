@@ -185,13 +185,13 @@ class PropertyResponseSchema(BaseModel):
     """Property response schema with related data"""
     id: int
     title: str
-    location: str
+    location: Optional[str] = None  # Constructed from city + locality if not present
     price: float
     price_text: Optional[str] = None
     type: PropertyType
     bedrooms: int
-    bathrooms: float
-    area: int
+    bathrooms: Optional[float] = 0
+    area: Optional[int] = None  # Can be buildup_area or plot_area
     status: PropertyStatus
     description: Optional[str]
     is_featured: bool
@@ -208,14 +208,29 @@ class PropertyResponseSchema(BaseModel):
     masterplan_images: List[PropertyMasterplanImageSchema] = []
     features: List[PropertyFeatureSchema] = []
     # Additional optional fields that may exist in database
+    city: Optional[str] = None
+    locality: Optional[str] = None
+    property_name: Optional[str] = None
+    project_name: Optional[str] = None
+    unit_type: Optional[str] = None
+    property_category: Optional[str] = None
     builder: Optional[str] = None
     configuration: Optional[str] = None
-    plot_area: Optional[str] = None
-    super_built_up_area: Optional[str] = None
-    total_flats: Optional[str] = None
-    total_floors: Optional[str] = None
-    total_acres: Optional[str] = None
-    property_status: Optional[str] = None  # Alternative status field
+    plot_area: Optional[float] = None
+    plot_length: Optional[float] = None
+    plot_breadth: Optional[float] = None
+    buildup_area: Optional[float] = None
+    carpet_area: Optional[float] = None
+    super_built_up_area: Optional[float] = None
+    total_flats: Optional[int] = None
+    total_floors: Optional[int] = None
+    total_acres: Optional[float] = None
+    property_status: Optional[str] = None  # Alternative status field (ready_to_move, under_construction, etc.)
+    listing_type: Optional[str] = None  # new, resell
+    video_link: Optional[str] = None  # Video preview link
+    direction: Optional[str] = None  # Property facing direction (east, west, north, south)
+    price_negotiable: Optional[bool] = None
+    price_includes_registration: Optional[bool] = None
 
     @field_serializer('created_at', 'updated_at')
     def serialize_datetime(self, value: datetime, _info):
