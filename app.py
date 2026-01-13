@@ -7,7 +7,7 @@ Flask Application for Tirumakudalu Properties
 Main API server with all endpoints
 """
 
-from flask import Flask, request, jsonify, send_file, abort, make_response
+from flask import Flask, request, jsonify, send_file, abort, make_response, url_for
 from flask_cors import CORS
 from typing import List, Optional, Tuple
 from datetime import datetime
@@ -34,6 +34,7 @@ from email.mime.multipart import MIMEMultipart
 import csv
 import io
 import json
+import re
 import traceback
 import threading
 import time
@@ -83,6 +84,15 @@ from passlib.context import CryptContext
 import warnings
 import logging
 from contextlib import redirect_stderr
+import hashlib
+
+# Try to import scrypt for manual verification
+try:
+    import scrypt
+    _scrypt_lib_available = True
+except ImportError:
+    _scrypt_lib_available = False
+    scrypt = None
 
 # Suppress bcrypt version warning and passlib warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="passlib")
@@ -93,13 +103,168 @@ logging.getLogger("passlib").setLevel(logging.ERROR)
 _stderr_buffer = io.StringIO()
 with redirect_stderr(_stderr_buffer):
     try:
-        pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    except Exception:
-        pwd_context = CryptContext(schemes=["bcrypt"])
+        # Try to support both bcrypt and scrypt for password verification
+        # If scrypt is not available, fall back to bcrypt only
+        try:
+            pwd_context = CryptContext(schemes=["bcrypt", "scrypt"], deprecated="auto")
+            _scrypt_available = True
+        except (ValueError, AttributeError) as e:
+            # scrypt not available, use bcrypt only
+            print(f"Note: scrypt not available, using bcrypt only: {str(e)}")
+            pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+            _scrypt_available = False
+    except Exception as e:
+        # Final fallback
+        print(f"Warning: Error initializing CryptContext: {str(e)}")
+        try:
+            pwd_context = CryptContext(schemes=["bcrypt", "scrypt"])
+            _scrypt_available = True
+        except Exception:
+            pwd_context = CryptContext(schemes=["bcrypt"])
+            _scrypt_available = False
+
+def verify_scrypt_hash_manual(password: str, hash_string: str) -> bool:
+    """Manually verify a scrypt hash using the scrypt library"""
+    if not _scrypt_lib_available:
+        return False
+    
+    try:
+        # Parse custom scrypt format: scrypt:N:r:p$salt$hash
+        # Example: scrypt:32768:8:1$5cgokKpgfRsnx5Gb$9f32d1abe6ce3ba3df9e62149c58e643dd4667b6179cccf5284ea6c56892ead188aa28371bfa309ba268fa4a2a437192d2e8b7a2bf7059fad8c0824e6cab4ea5
+        if not hash_string.startswith('scrypt:'):
+            return False
+        
+        # Remove 'scrypt:' prefix
+        hash_part = hash_string[7:]
+        
+        # Split by $ to get params and salt+hash
+        parts = hash_part.split('$')
+        if len(parts) != 3:
+            return False
+        
+        # Parse N:r:p parameters
+        params = parts[0].split(':')
+        if len(params) != 3:
+            return False
+        
+        N = int(params[0])  # CPU/memory cost parameter
+        r = int(params[1])  # Block size parameter
+        p = int(params[2])  # Parallelization parameter
+        
+        # Salt might be base64 or raw string - try both
+        salt_str = parts[1]
+        stored_hash = parts[2]
+        
+        # Try different salt decoding methods
+        salt = None
+        # Method 1: Try base64 decode (with and without padding)
+        try:
+            # Add padding if needed for base64
+            salt_str_padded = salt_str
+            missing_padding = len(salt_str) % 4
+            if missing_padding:
+                salt_str_padded += '=' * (4 - missing_padding)
+            salt = base64.b64decode(salt_str_padded)
+        except Exception:
+            pass
+        
+        # Method 2: If base64 failed, try as raw UTF-8 string
+        if salt is None:
+            try:
+                salt = salt_str.encode('utf-8')
+            except Exception:
+                pass
+        
+        # Method 3: If still None, try as hex
+        if salt is None:
+            try:
+                salt = bytes.fromhex(salt_str)
+            except Exception:
+                pass
+        
+        if salt is None:
+            print(f"Error: Could not decode salt: {salt_str}")
+            return False
+        
+        # Compute hash using scrypt
+        password_bytes = password.encode('utf-8')
+        computed_hash = scrypt.hash(password_bytes, salt, N=N, r=r, p=p)
+        
+        # Convert to hex for comparison
+        computed_hash_hex = computed_hash.hex()
+        
+        # Debug logging
+        print(f"Debug scrypt verification: N={N}, r={r}, p={p}, salt_len={len(salt)}, stored_hash_len={len(stored_hash)}, computed_hash_len={len(computed_hash_hex)}")
+        
+        # Compare hashes (stored hash is already hex)
+        return computed_hash_hex == stored_hash
+    except Exception as e:
+        print(f"Error in manual scrypt verification: {str(e)}")
+        traceback.print_exc()
+        return False
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against a hash"""
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        # Check if hash is valid before attempting verification
+        if not hashed_password or not isinstance(hashed_password, str):
+            print(f"Error: Invalid hash format - hash is empty or not a string")
+            return False
+        
+        # Check if hash looks valid (should start with $2b$, $2a$, $2y$ for bcrypt or scrypt: for scrypt)
+        if not (hashed_password.startswith('$2') or hashed_password.startswith('scrypt:')):
+            print(f"Error: Hash format not recognized - hash starts with: {hashed_password[:20] if len(hashed_password) > 20 else hashed_password}")
+            return False
+        
+        # Try passlib verification first
+        try:
+            return pwd_context.verify(plain_password, hashed_password)
+        except Exception as passlib_error:
+            error_msg = str(passlib_error).lower()
+            
+            # If passlib can't identify scrypt hash, try manual verification
+            if hashed_password.startswith('scrypt:'):
+                if "hash could not be identified" in error_msg or "unknown hash algorithm" in error_msg:
+                    print(f"Passlib couldn't verify scrypt hash, trying manual verification...")
+                    if _scrypt_lib_available:
+                        result = verify_scrypt_hash_manual(plain_password, hashed_password)
+                        if result:
+                            print(f"Manual scrypt verification succeeded")
+                            return True
+                        else:
+                            print(f"Manual scrypt verification failed")
+                    else:
+                        raise ValueError("Password hash uses scrypt format, but scrypt library is not available. Please install scrypt package or re-hash the password using bcrypt.")
+                else:
+                    # Some other error with passlib, try manual verification as fallback
+                    if _scrypt_lib_available:
+                        print(f"Passlib error with scrypt, trying manual verification: {error_msg}")
+                        result = verify_scrypt_hash_manual(plain_password, hashed_password)
+                        if result:
+                            return True
+            
+            # Re-raise if we can't handle it
+            raise passlib_error
+            
+    except ValueError as e:
+        # Re-raise ValueError (our custom error for missing scrypt)
+        raise
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "hash could not be identified" in error_msg or "unknown hash algorithm" in error_msg:
+            # Hash format not supported
+            if hashed_password.startswith('scrypt:'):
+                if _scrypt_lib_available:
+                    # Last attempt with manual verification
+                    result = verify_scrypt_hash_manual(plain_password, hashed_password)
+                    if result:
+                        return True
+                raise ValueError("Password hash uses scrypt format, but scrypt support is not available. Please install scrypt package or re-hash the password using bcrypt.")
+            else:
+                raise ValueError(f"Password hash format not recognized: {hashed_password[:30]}...")
+        print(f"Error verifying password: {str(e)}")
+        print(f"Hash format: {hashed_password[:50] if hashed_password and len(hashed_password) > 50 else hashed_password}")
+        raise
 
 def get_password_hash(password: str) -> str:
     """Hash a password"""
@@ -573,6 +738,38 @@ DEBUG_MODE = os.getenv("DEBUG", "False").lower() == "true"
 
 app = Flask(__name__)
 
+# ============================================
+# CACHE BUSTING CONFIGURATION
+# ============================================
+
+# Enable long-term caching for static assets (safe with versioned URLs)
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 31536000  # 1 year
+
+def static_versioned(endpoint, **values):
+    """
+    Automatically append version parameter to static file URLs based on file modification time.
+    This ensures browsers fetch new versions when files change, while allowing aggressive caching.
+    """
+    if endpoint == 'static':
+        filename = values.get('filename')
+        if filename:
+            # Try to find the file in the static directory
+            static_dir = os.path.join(os.path.dirname(__file__), 'static')
+            file_path = os.path.join(static_dir, filename)
+            if os.path.exists(file_path):
+                values['v'] = int(os.stat(file_path).st_mtime)
+    return url_for(endpoint, **values)
+
+
+@app.context_processor
+def override_url_for():
+    """Override url_for to automatically version static files"""
+    return dict(url_for=static_versioned)
+
+# ============================================
+# CORS CONFIGURATION
+# ============================================
+
 # Configure CORS
 # SECURITY: In production, explicitly set ALLOWED_ORIGINS to your frontend domain(s)
 # Example: ALLOWED_ORIGINS=https://yourdomain.com,https://www.yourdomain.com
@@ -619,6 +816,71 @@ def get_client_ip():
     
     # Fallback to request.remote_addr
     return request.remote_addr or None
+
+
+def get_versioned_url(file_path: str, file_type: str = "css") -> str:
+    """
+    Generate a versioned URL for a static file based on its modification time.
+    This enables cache busting while allowing aggressive caching.
+    
+    Args:
+        file_path: Path to the file relative to the css/js directory
+        file_type: Either "css" or "js"
+    
+    Returns:
+        URL with version parameter, e.g., "/css/style.css?v=1705140123"
+    """
+    try:
+        if file_type == "css":
+            full_path = FRONTEND_DIR / "css" / file_path
+        elif file_type == "js":
+            full_path = FRONTEND_DIR / "js" / file_path
+        else:
+            return f"/{file_type}/{file_path}"
+        
+        if full_path.exists() and full_path.is_file():
+            version = int(os.stat(str(full_path)).st_mtime)
+            return f"/{file_type}/{file_path}?v={version}"
+        else:
+            # File doesn't exist, return URL without version
+            return f"/{file_type}/{file_path}"
+    except Exception as e:
+        print(f"Error generating versioned URL for {file_type}/{file_path}: {str(e)}")
+        return f"/{file_type}/{file_path}"
+
+
+def inject_versioned_urls(html_content: str) -> str:
+    """
+    Inject version parameters into CSS and JS file references in HTML content.
+    This enables automatic cache busting for static HTML files.
+    """
+    import re
+    
+    # Pattern to match CSS links: href="/css/filename.css" or href='/css/filename.css'
+    css_pattern = r'(href=["\'])(/css/([^"\']+\.css))(["\'])'
+    
+    def css_replacer(match):
+        quote_start = match.group(1)
+        file_path = match.group(3)
+        quote_end = match.group(4)
+        versioned_url = get_versioned_url(file_path, "css")
+        return f'{quote_start}{versioned_url}{quote_end}'
+    
+    html_content = re.sub(css_pattern, css_replacer, html_content)
+    
+    # Pattern to match JS scripts: src="/js/filename.js" or src='/js/filename.js'
+    js_pattern = r'(src=["\'])(/js/([^"\']+\.js))(["\'])'
+    
+    def js_replacer(match):
+        quote_start = match.group(1)
+        file_path = match.group(3)
+        quote_end = match.group(4)
+        versioned_url = get_versioned_url(file_path, "js")
+        return f'{quote_start}{versioned_url}{quote_end}'
+    
+    html_content = re.sub(js_pattern, js_replacer, html_content)
+    
+    return html_content
 
 # Get the base directory
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -1092,10 +1354,22 @@ def login():
 
 @app.route("/", methods=["GET"])
 def root():
-    """Serve the main index page"""
+    """Serve the main index page with cache-busted static files"""
     index_path = FRONTEND_DIR / "index.html"
     if index_path.exists():
-        return send_file(str(index_path))
+        # Read HTML content and inject versioned URLs for CSS/JS
+        with open(index_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        html_content = inject_versioned_urls(html_content)
+        
+        response = make_response(html_content)
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        # HTML should not be cached aggressively (static assets are versioned)
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     return jsonify({
         "message": "Tirumakudalu Properties API",
         "version": "1.0.0",
@@ -1105,10 +1379,22 @@ def root():
 
 @app.route("/index.html", methods=["GET"])
 def index_page_html():
-    """Serve the index page (with .html extension)"""
+    """Serve the index page (with .html extension) with cache-busted static files"""
     index_path = FRONTEND_DIR / "index.html"
     if index_path.exists():
-        return send_file(str(index_path))
+        # Read HTML content and inject versioned URLs for CSS/JS
+        with open(index_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        html_content = inject_versioned_urls(html_content)
+        
+        response = make_response(html_content)
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        # HTML should not be cached aggressively (static assets are versioned)
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     abort_with_message(404, "Page not found")
 
 
@@ -2225,10 +2511,31 @@ def get_testimonials():
                 print(f"Error converting testimonial {t.get('id', 'unknown')}: {str(schema_error)}")
                 continue
         
-        return jsonify([r.dict() for r in result])
+        data = [r.dict() for r in result]
+        
+        # Support JSONP if callback parameter is provided
+        callback = request.args.get('callback')
+        if callback:
+            # Validate callback name to prevent XSS
+            if re.match(r'^[a-zA-Z_$][a-zA-Z0-9_$]*$', callback):
+                response = make_response(f"{callback}({json.dumps(data)});")
+                response.headers['Content-Type'] = 'application/javascript'
+                return response
+            else:
+                # Invalid callback name, return regular JSON
+                return jsonify({'error': 'Invalid callback parameter'}), 400
+        
+        return jsonify(data)
     except Exception as e:
         print(f"Error fetching testimonials: {str(e)}")
         traceback.print_exc()
+        # Support JSONP even for errors
+        callback = request.args.get('callback')
+        if callback:
+            if re.match(r'^[a-zA-Z_$][a-zA-Z0-9_$]*$', callback):
+                response = make_response(f"{callback}([]);")
+                response.headers['Content-Type'] = 'application/javascript'
+                return response
         return jsonify([])
 
 
@@ -2869,6 +3176,9 @@ def verify_app_metrics_password():
         if not password:
             return jsonify({"success": False, "message": "Password is required"}), 400
         
+        # Check if password is already encrypted (SHA-256 hash from client)
+        is_encrypted = data.get('encrypted', False)
+        
         # Get password hash from database
         query = "SELECT password_hash FROM app_metrics_password ORDER BY id DESC LIMIT 1"
         results = execute_query(query)
@@ -2883,21 +3193,56 @@ def verify_app_metrics_password():
         # Debug logging (remove in production if needed)
         print(f"Debug: Attempting to verify password. Hash from DB: {password_hash[:20]}...")
         print(f"Debug: Password length: {len(password)}")
+        print(f"Debug: Password is encrypted (SHA-256): {is_encrypted}")
+        
+        # If password is encrypted (SHA-256 from client):
+        # - The stored hash should be bcrypt(SHA-256(original_password))
+        # - We receive SHA-256(password), so we verify it against the stored bcrypt hash
+        # - Since bcrypt has random salts, we use verify_password which handles salt comparison
+        if is_encrypted:
+            # The received password is already SHA-256 hashed
+            # Verify the SHA-256 hash against the stored bcrypt(SHA-256(original_password))
+            password_to_verify = password  # This is the SHA-256 hash
+        else:
+            # Password is plain text, use as-is
+            # The stored hash should be bcrypt(original_password)
+            password_to_verify = password
         
         # Verify password
         try:
-            is_valid = verify_password(password, password_hash)
+            is_valid = verify_password(password_to_verify, password_hash)
             print(f"Debug: Password verification result: {is_valid}")
             
             if is_valid:
                 return jsonify({"success": True, "message": "Password verified"}), 200
             else:
                 return jsonify({"success": False, "message": "Invalid password"}), 401
-        except Exception as verify_error:
-            print(f"Debug: Password verification error: {str(verify_error)}")
-            print(f"Debug: Hash format check - starts with $2b$: {password_hash.startswith('$2b$')}")
+        except ValueError as verify_error:
+            # Handle specific errors like missing scrypt support
+            error_msg = str(verify_error)
+            print(f"Debug: Password verification error: {error_msg}")
+            print(f"Debug: Hash format check - starts with scrypt:: {password_hash.startswith('scrypt:')}")
             traceback.print_exc()
-            return jsonify({"success": False, "message": f"Error during password verification: {str(verify_error)}"}), 500
+            return jsonify({"success": False, "message": error_msg}), 500
+        except Exception as verify_error:
+            error_msg = str(verify_error)
+            print(f"Debug: Password verification error: {error_msg}")
+            print(f"Debug: Hash format check - starts with $2b$: {password_hash.startswith('$2b$')}")
+            print(f"Debug: Hash format check - starts with scrypt:: {password_hash.startswith('scrypt:')}")
+            traceback.print_exc()
+            # Provide a more user-friendly error message
+            if "hash could not be identified" in error_msg.lower():
+                if password_hash.startswith('scrypt:'):
+                    return jsonify({
+                        "success": False, 
+                        "message": "Password hash uses scrypt format, but scrypt support is not available. Please contact the administrator to install scrypt support or update the password."
+                    }), 500
+                else:
+                    return jsonify({
+                        "success": False, 
+                        "message": f"Password hash format not recognized. Please contact the administrator."
+                    }), 500
+            return jsonify({"success": False, "message": f"Error during password verification: {error_msg}"}), 500
             
     except Exception as e:
         print(f"Error verifying app-metrics password: {str(e)}")
@@ -3602,35 +3947,10 @@ def update_inquiry(inquiry_id: int):
 # ROUTES - STATISTICS
 # ============================================
 
-# Simple in-memory cache for stats (TTL: 60 seconds)
-_stats_cache = {}
-_stats_cache_ttl = 60  # Cache for 60 seconds
-
-def get_cached_stats(cache_key):
-    """Get cached stats if available and not expired"""
-    if cache_key in _stats_cache:
-        cached_data, timestamp = _stats_cache[cache_key]
-        if time.time() - timestamp < _stats_cache_ttl:
-            return cached_data
-        else:
-            # Remove expired cache
-            del _stats_cache[cache_key]
-    return None
-
-def set_cached_stats(cache_key, data):
-    """Cache stats data with current timestamp"""
-    _stats_cache[cache_key] = (data, time.time())
-
 @app.route("/api/stats/properties", methods=["GET"])
 def get_property_stats():
-    """Get property statistics (optimized with single query and caching)"""
+    """Get property statistics (optimized with single query)"""
     try:
-        # Check cache first
-        cache_key = "property_stats"
-        cached_result = get_cached_stats(cache_key)
-        if cached_result:
-            return jsonify(cached_result)
-        
         # Query both residential_properties and plot_properties
         query = f"""
             SELECT 
@@ -3686,8 +4006,6 @@ def get_property_stats():
         )
         
         result_dict = result.dict()
-        # Cache the result
-        set_cached_stats(cache_key, result_dict)
         
         return jsonify(result_dict)
     except Exception as e:
@@ -3699,14 +4017,8 @@ def get_property_stats():
 
 @app.route("/api/stats/frontend", methods=["GET"])
 def get_frontend_stats():
-    """Get frontend statistics for homepage (with caching)"""
+    """Get frontend statistics for homepage"""
     try:
-        # Check cache first
-        cache_key = "frontend_stats"
-        cached_result = get_cached_stats(cache_key)
-        if cached_result:
-            return jsonify(cached_result)
-        
         # Optimized: Use single query with conditional aggregation where possible
         def get_count(query):
             try:
@@ -3717,15 +4029,16 @@ def get_frontend_stats():
                 return 0
         
         properties_listed = get_count("SELECT COUNT(*) as count FROM (SELECT id FROM residential_properties WHERE is_active = 1 UNION ALL SELECT id FROM plot_properties WHERE is_active = 1) as combined")
-        happy_clients = get_count("SELECT COUNT(*) as count FROM testimonials WHERE is_approved = 1")
-        if happy_clients == 0:
-            happy_clients = get_count("SELECT COUNT(*) as count FROM contact_inquiries")
         
-        years_experience = 15
+        # Fixed values as requested
+        happy_clients = 45
+        deals_closed = 20
         
-        deals_closed = get_count("SELECT COUNT(*) as count FROM contact_inquiries WHERE status = 'closed'")
-        if deals_closed == 0:
-            deals_closed = get_count("SELECT COUNT(*) as count FROM contact_inquiries")
+        # Calculate years of experience dynamically (auto-increase each year)
+        # Base year: 2010 (2026 - 2010 = 16 years)
+        current_year = datetime.now().year
+        base_year = 2010
+        years_experience = current_year - base_year
         
         result = FrontendStatsSchema(
             properties_listed=properties_listed,
@@ -3735,13 +4048,15 @@ def get_frontend_stats():
         )
         
         result_dict = result.dict()
-        # Cache the result
-        set_cached_stats(cache_key, result_dict)
         
         return jsonify(result_dict)
     except Exception as e:
         print(f"Error in get_frontend_stats: {str(e)}")
-        result = FrontendStatsSchema(properties_listed=0, happy_clients=0, years_experience=15, deals_closed=0)
+        # Calculate years of experience dynamically even in error case
+        current_year = datetime.now().year
+        base_year = 2010
+        years_experience = current_year - base_year
+        result = FrontendStatsSchema(properties_listed=0, happy_clients=45, years_experience=years_experience, deals_closed=20)
         return jsonify(result.dict())
 
 
@@ -4868,7 +5183,7 @@ def delete_unit_type(unit_type_id):
 
 @app.route("/css/<path:file_path>", methods=["GET"])
 def serve_css(file_path: str):
-    """Serve CSS files"""
+    """Serve CSS files with cache busting support"""
     try:
         if ".." in file_path or file_path.startswith("/"):
             abort_with_message(400, "Invalid file path")
@@ -4884,7 +5199,15 @@ def serve_css(file_path: str):
             abort_with_message(400, "Invalid file path")
         
         if css_path.exists() and css_path.is_file():
-            return send_file(str(css_path), mimetype="text/css")
+            response = send_file(str(css_path), mimetype="text/css")
+            # If version parameter is present, allow long-term caching (URL changes when content changes)
+            if request.args.get('v'):
+                # Versioned URL - safe to cache aggressively
+                response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+            else:
+                # No version parameter - still allow caching but with shorter TTL
+                response.headers['Cache-Control'] = 'public, max-age=3600, must-revalidate'
+            return response
         abort_with_message(404, "CSS file not found")
     except Exception as e:
         print(f"Error serving CSS: {str(e)}")
@@ -4894,7 +5217,7 @@ def serve_css(file_path: str):
 
 @app.route("/js/<path:file_path>", methods=["GET"])
 def serve_js(file_path: str):
-    """Serve JavaScript files"""
+    """Serve JavaScript files with cache busting support"""
     try:
         if ".." in file_path or file_path.startswith("/"):
             abort_with_message(400, "Invalid file path")
@@ -4911,14 +5234,12 @@ def serve_js(file_path: str):
         
         if js_path.exists() and js_path.is_file():
             response = send_file(str(js_path), mimetype="application/javascript")
-            # Check if there's a version query parameter - if so, don't cache
+            # If version parameter is present, allow long-term caching (URL changes when content changes)
             if request.args.get('v'):
-                # Version parameter present - don't cache, always serve fresh
-                response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
-                response.headers['Pragma'] = 'no-cache'
-                response.headers['Expires'] = '0'
+                # Versioned URL - safe to cache aggressively
+                response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
             else:
-                # No version parameter - allow caching
+                # No version parameter - still allow caching but with shorter TTL
                 response.headers['Cache-Control'] = 'public, max-age=3600, must-revalidate'
             return response
         abort_with_message(404, "JS file not found")
@@ -5085,14 +5406,26 @@ def serve_frontend_page(page_name: str):
 
 @app.route("/properties", methods=["GET"])
 def properties_page():
-    """Serve the properties page"""
+    """Serve the properties page with cache-busted static files"""
     try:
         if not FRONTEND_DIR or not FRONTEND_DIR.exists():
             abort_with_message(500, "Frontend directory not configured")
         
         properties_path = FRONTEND_DIR / "properties.html"
         if properties_path.exists() and properties_path.is_file():
-            return send_file(str(properties_path))
+            # Read HTML content and inject versioned URLs for CSS/JS
+            with open(properties_path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            
+            html_content = inject_versioned_urls(html_content)
+            
+            response = make_response(html_content)
+            response.headers['Content-Type'] = 'text/html; charset=utf-8'
+            # HTML should not be cached aggressively (static assets are versioned)
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            return response
         abort_with_message(404, "Page not found")
     except Exception as e:
         print(f"Error serving properties page: {str(e)}")
@@ -5102,90 +5435,165 @@ def properties_page():
 
 @app.route("/properties.html", methods=["GET"])
 def properties_page_html():
-    """Serve the properties page (with .html extension)"""
+    """Serve the properties page (with .html extension) with cache-busted static files"""
     properties_path = FRONTEND_DIR / "properties.html"
     if properties_path.exists():
-        return send_file(str(properties_path))
+        # Read HTML content and inject versioned URLs for CSS/JS
+        with open(properties_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        html_content = inject_versioned_urls(html_content)
+        
+        response = make_response(html_content)
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        # HTML should not be cached aggressively (static assets are versioned)
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     abort_with_message(404, "Page not found")
 
 
 @app.route("/property-details", methods=["GET"])
 def property_details_page():
-    """Serve the property details page"""
+    """Serve the property details page with cache-busted static files"""
     details_path = FRONTEND_DIR / "property-details.html"
     if details_path.exists():
-        return send_file(str(details_path))
+        # Read HTML content and inject versioned URLs for CSS/JS
+        with open(details_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        html_content = inject_versioned_urls(html_content)
+        
+        response = make_response(html_content)
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        # HTML should not be cached aggressively (static assets are versioned)
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     abort_with_message(404, "Page not found")
 
 
 @app.route("/property-details.html", methods=["GET"])
 def property_details_page_html():
-    """Serve the property details page (with .html extension)"""
+    """Serve the property details page (with .html extension) with cache-busted static files"""
     details_path = FRONTEND_DIR / "property-details.html"
     if details_path.exists():
-        return send_file(str(details_path))
+        # Read HTML content and inject versioned URLs for CSS/JS
+        with open(details_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        html_content = inject_versioned_urls(html_content)
+        
+        response = make_response(html_content)
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        # HTML should not be cached aggressively (static assets are versioned)
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     abort_with_message(404, "Page not found")
 
 
 @app.route("/blogs", methods=["GET"])
 def blogs_page():
-    """Serve the blogs page"""
+    """Serve the blogs page with cache-busted static files"""
     blogs_path = FRONTEND_DIR / "blogs.html"
     if blogs_path.exists():
-        return send_file(str(blogs_path))
+        # Read HTML content and inject versioned URLs for CSS/JS
+        with open(blogs_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        html_content = inject_versioned_urls(html_content)
+        
+        response = make_response(html_content)
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        # HTML should not be cached aggressively (static assets are versioned)
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     abort_with_message(404, "Page not found")
 
 
 @app.route("/blogs.html", methods=["GET"])
 def blogs_page_html():
-    """Serve the blogs page (with .html extension)"""
+    """Serve the blogs page (with .html extension) with cache-busted static files"""
     blogs_path = FRONTEND_DIR / "blogs.html"
     if blogs_path.exists():
-        return send_file(str(blogs_path))
+        # Read HTML content and inject versioned URLs for CSS/JS
+        with open(blogs_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        html_content = inject_versioned_urls(html_content)
+        
+        response = make_response(html_content)
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        # HTML should not be cached aggressively (static assets are versioned)
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     abort_with_message(404, "Page not found")
 
 
 @app.route("/blog-details", methods=["GET"])
 def blog_details_page():
-    """Serve the blog details page"""
+    """Serve the blog details page with cache-busted static files"""
     blog_details_path = FRONTEND_DIR / "blog-details.html"
     if blog_details_path.exists():
-        return send_file(str(blog_details_path))
+        # Read HTML content and inject versioned URLs for CSS/JS
+        with open(blog_details_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        html_content = inject_versioned_urls(html_content)
+        
+        response = make_response(html_content)
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        # HTML should not be cached aggressively (static assets are versioned)
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     abort_with_message(404, "Page not found")
 
 
 @app.route("/blog-details.html", methods=["GET"])
 def blog_details_page_html():
-    """Serve the blog details page (with .html extension)"""
+    """Serve the blog details page (with .html extension) with cache-busted static files"""
     blog_details_path = FRONTEND_DIR / "blog-details.html"
     if blog_details_path.exists():
-        return send_file(str(blog_details_path))
+        # Read HTML content and inject versioned URLs for CSS/JS
+        with open(blog_details_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        html_content = inject_versioned_urls(html_content)
+        
+        response = make_response(html_content)
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        # HTML should not be cached aggressively (static assets are versioned)
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     abort_with_message(404, "Page not found")
 
 
 @app.route("/dashboard", methods=["GET"])
 def dashboard_page():
-    """Serve the dashboard page"""
+    """Serve the dashboard page with cache-busted static files"""
     dashboard_path = FRONTEND_DIR / "dashboard.html"
     if dashboard_path.exists():
-        # Read the HTML file and inject cache-busting timestamp
+        # Read HTML content and inject versioned URLs for CSS/JS
         with open(dashboard_path, 'r', encoding='utf-8') as f:
             html_content = f.read()
         
-        # Replace ANY version number with current timestamp for cache busting
-        import time
-        import re
-        cache_buster = str(int(time.time()))
-        # Match dashboard.js?v= followed by any characters (version number)
-        html_content = re.sub(
-            r'dashboard\.js\?v=[^"\']+',
-            f'dashboard.js?v={cache_buster}',
-            html_content
-        )
+        html_content = inject_versioned_urls(html_content)
         
         response = make_response(html_content)
         response.headers['Content-Type'] = 'text/html; charset=utf-8'
-        # Add cache-control headers to prevent aggressive caching of HTML
+        # HTML should not be cached aggressively (static assets are versioned)
         response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
         response.headers['Pragma'] = 'no-cache'
         response.headers['Expires'] = '0'
@@ -5195,27 +5603,18 @@ def dashboard_page():
 
 @app.route("/dashboard.html", methods=["GET"])
 def dashboard_page_html():
-    """Serve the dashboard page (with .html extension)"""
+    """Serve the dashboard page (with .html extension) with cache-busted static files"""
     dashboard_path = FRONTEND_DIR / "dashboard.html"
     if dashboard_path.exists():
-        # Read the HTML file and inject cache-busting timestamp
+        # Read HTML content and inject versioned URLs for CSS/JS
         with open(dashboard_path, 'r', encoding='utf-8') as f:
             html_content = f.read()
         
-        # Replace ANY version number with current timestamp for cache busting
-        import time
-        import re
-        cache_buster = str(int(time.time()))
-        # Match dashboard.js?v= followed by any characters (version number)
-        html_content = re.sub(
-            r'dashboard\.js\?v=[^"\']+',
-            f'dashboard.js?v={cache_buster}',
-            html_content
-        )
+        html_content = inject_versioned_urls(html_content)
         
         response = make_response(html_content)
         response.headers['Content-Type'] = 'text/html; charset=utf-8'
-        # Add cache-control headers to prevent aggressive caching of HTML
+        # HTML should not be cached aggressively (static assets are versioned)
         response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
         response.headers['Pragma'] = 'no-cache'
         response.headers['Expires'] = '0'
@@ -5297,10 +5696,22 @@ def nri_property_investment_page_html():
 
 @app.route("/app-metrics.html", methods=["GET"])
 def app_metrics_page_html():
-    """Serve the application metrics page (with .html extension)"""
+    """Serve the application metrics page (with .html extension) with cache-busted static files"""
     metrics_path = FRONTEND_DIR / "app-metrics.html"
     if metrics_path.exists():
-        return send_file(str(metrics_path))
+        # Read HTML content and inject versioned URLs for CSS/JS
+        with open(metrics_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        html_content = inject_versioned_urls(html_content)
+        
+        response = make_response(html_content)
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        # HTML should not be cached aggressively (static assets are versioned)
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     abort_with_message(404, "Page not found")
 
 
@@ -5315,10 +5726,22 @@ def settings_page():
 
 @app.route("/settings.html", methods=["GET"])
 def settings_page_html():
-    """Serve the settings page (with .html extension)"""
+    """Serve the settings page (with .html extension) with cache-busted static files"""
     settings_path = FRONTEND_DIR / "settings.html"
     if settings_path.exists():
-        return send_file(str(settings_path))
+        # Read HTML content and inject versioned URLs for CSS/JS
+        with open(settings_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        html_content = inject_versioned_urls(html_content)
+        
+        response = make_response(html_content)
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        # HTML should not be cached aggressively (static assets are versioned)
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     abort_with_message(404, "Page not found")
 
 
