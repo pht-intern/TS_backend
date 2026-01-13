@@ -1,3 +1,7 @@
+import time
+print("APP BOOT TIME:", time.time())
+
+
 """
 Flask Application for Tirumakudalu Properties
 Main API server with all endpoints
