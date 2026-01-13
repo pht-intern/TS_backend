@@ -1079,59 +1079,6 @@ def save_partner_logo(logo_url: Optional[str], images_dir: Path) -> Optional[str
         return logo_url
 
 
-def process_image_urls(image_urls: List[str], images_dir: Path) -> List[str]:
-    """Process a list of image URLs, converting base64 to files if needed."""
-    processed_urls = []
-    for url in image_urls:
-        if url and url.startswith('data:image/'):
-            processed_url = save_base64_image(url, images_dir)
-            processed_urls.append(processed_url)
-        else:
-            processed_urls.append(url)
-    return processed_urls
-
-
-def normalize_image_url(url: Optional[str]) -> Optional[str]:
-    """Normalize image URL for frontend compatibility"""
-    if not url:
-        return None
-    # If it's already a full URL (http/https), return as is
-    if url.startswith('http://') or url.startswith('https://'):
-        return url
-    # If it's already a data URL (base64), return as is
-    if url.startswith('data:'):
-        return url
-    
-    # Handle server paths that include /public_html/ or /home/ directories
-    # Extract the relative path after /public_html/ or find the last /images/ occurrence
-    if '/public_html/' in url:
-        # Extract path after /public_html/
-        parts = url.split('/public_html/', 1)
-        if len(parts) > 1:
-            url = '/' + parts[1].lstrip('/')
-    elif '/images/' in url:
-        # Find the last occurrence of /images/ to handle cases like /images/home/.../images/logos/...
-        last_images_index = url.rfind('/images/')
-        if last_images_index >= 0:
-            url = url[last_images_index:]
-    
-    # If it already starts with /images/ or /frontend/, return as is
-    if url.startswith('/images/') or url.startswith('/frontend/'):
-        return url
-    clean_url = url.lstrip('/')
-    return f"/images/{clean_url}"
-
-
-# ============================================
-# HELPER FUNCTIONS FOR ERROR HANDLING
-# ============================================
-
-def abort_with_message(status_code: int, message: str):
-    """Helper function to abort with a custom error message"""
-    response = make_response(jsonify({"error": message, "success": False}), status_code)
-    abort(response)
-
-
 # ============================================
 # AUTHENTICATION & AUTHORIZATION
 # ============================================
@@ -1199,6 +1146,59 @@ def require_admin_auth(f):
         
         return f(*args, **kwargs)
     return decorated_function
+
+
+def process_image_urls(image_urls: List[str], images_dir: Path) -> List[str]:
+    """Process a list of image URLs, converting base64 to files if needed."""
+    processed_urls = []
+    for url in image_urls:
+        if url and url.startswith('data:image/'):
+            processed_url = save_base64_image(url, images_dir)
+            processed_urls.append(processed_url)
+        else:
+            processed_urls.append(url)
+    return processed_urls
+
+
+def normalize_image_url(url: Optional[str]) -> Optional[str]:
+    """Normalize image URL for frontend compatibility"""
+    if not url:
+        return None
+    # If it's already a full URL (http/https), return as is
+    if url.startswith('http://') or url.startswith('https://'):
+        return url
+    # If it's already a data URL (base64), return as is
+    if url.startswith('data:'):
+        return url
+    
+    # Handle server paths that include /public_html/ or /home/ directories
+    # Extract the relative path after /public_html/ or find the last /images/ occurrence
+    if '/public_html/' in url:
+        # Extract path after /public_html/
+        parts = url.split('/public_html/', 1)
+        if len(parts) > 1:
+            url = '/' + parts[1].lstrip('/')
+    elif '/images/' in url:
+        # Find the last occurrence of /images/ to handle cases like /images/home/.../images/logos/...
+        last_images_index = url.rfind('/images/')
+        if last_images_index >= 0:
+            url = url[last_images_index:]
+    
+    # If it already starts with /images/ or /frontend/, return as is
+    if url.startswith('/images/') or url.startswith('/frontend/'):
+        return url
+    clean_url = url.lstrip('/')
+    return f"/images/{clean_url}"
+
+
+# ============================================
+# HELPER FUNCTIONS FOR ERROR HANDLING
+# ============================================
+
+def abort_with_message(status_code: int, message: str):
+    """Helper function to abort with a custom error message"""
+    response = make_response(jsonify({"error": message, "success": False}), status_code)
+    abort(response)
 
 
 # ============================================
