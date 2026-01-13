@@ -739,6 +739,26 @@ DEBUG_MODE = os.getenv("DEBUG", "False").lower() == "true"
 app = Flask(__name__)
 
 # ============================================
+# SESSION CONFIGURATION
+# ============================================
+# Configure Flask sessions for cookie-based authentication
+# Even though we use client-side storage, this ensures cookies work if needed
+SECRET_KEY = os.getenv("SECRET_KEY", os.urandom(32).hex())
+app.config['SECRET_KEY'] = SECRET_KEY
+
+# Session cookie configuration for cross-origin support (cPanel production)
+# CRITICAL: These settings ensure cookies persist across redirects
+app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # Allow cross-site cookies
+app.config['SESSION_COOKIE_SECURE'] = True  # Required for SameSite=None (HTTPS only)
+app.config['SESSION_COOKIE_HTTPONLY'] = True  # Prevent XSS attacks
+app.config['SESSION_COOKIE_SAMESITE_FORCE'] = False  # Don't force SameSite
+
+# For local development (HTTP), use Lax instead of None
+if DEBUG_MODE and not os.getenv("FORCE_HTTPS", "False").lower() == "true":
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    app.config['SESSION_COOKIE_SECURE'] = False
+
+# ============================================
 # CACHE BUSTING CONFIGURATION
 # ============================================
 
