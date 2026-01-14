@@ -182,9 +182,18 @@ def track_request_metrics(response):
 # Import route modules - they will register routes on the app instance
 try:
     # Import route modules - they register routes via register functions
-    from routes import auth, health
+    from routes import auth, health, properties, partners, testimonials, stats, metrics, cities, amenities, unit_types, logs
     auth.register_auth_routes(app)
     health.register_health_routes(app)
+    properties.register_properties_routes(app)
+    partners.register_partners_routes(app)
+    testimonials.register_testimonials_routes(app)
+    stats.register_stats_routes(app)
+    metrics.register_metrics_routes(app)
+    cities.register_cities_routes(app)
+    amenities.register_amenities_routes(app)
+    unit_types.register_unit_types_routes(app)
+    logs.register_logs_routes(app)
     print("✓ Core route modules loaded successfully")
     
     # Import remaining routes from old app.py
