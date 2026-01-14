@@ -5,7 +5,8 @@ Pydantic schemas for API request/response validation
 
 from typing import Optional, List
 from datetime import datetime
-from pydantic import BaseModel, Field, EmailStr, HttpUrl, field_serializer
+import json
+from pydantic import BaseModel, Field, EmailStr, HttpUrl, field_serializer, field_validator
 from models import (
     PropertyType, PropertyStatus, InquiryStatus,
     Property, PropertyImage, PropertyFeature,
@@ -104,7 +105,7 @@ class PropertyImageSchema(BaseModel):
     image_url: str
     image_order: int
     is_primary: bool
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     @field_serializer('created_at')
     def serialize_datetime(self, value: datetime, _info):
@@ -121,7 +122,7 @@ class PropertyProjectImageSchema(BaseModel):
     property_id: int
     image_url: str
     image_order: int
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     @field_serializer('created_at')
     def serialize_datetime(self, value: datetime, _info):
@@ -138,7 +139,7 @@ class PropertyFloorplanImageSchema(BaseModel):
     property_id: int
     image_url: str
     image_order: int
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     @field_serializer('created_at')
     def serialize_datetime(self, value: datetime, _info):
@@ -155,7 +156,7 @@ class PropertyMasterplanImageSchema(BaseModel):
     property_id: int
     image_url: str
     image_order: int
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     @field_serializer('created_at')
     def serialize_datetime(self, value: datetime, _info):
@@ -170,7 +171,7 @@ class PropertyFeatureSchema(BaseModel):
     """Property feature schema for responses"""
     id: int
     feature_name: str
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     @field_serializer('created_at')
     def serialize_datetime(self, value: datetime, _info):
@@ -200,13 +201,13 @@ class PropertyResponseSchema(BaseModel):
     directions: Optional[str] = None
     length: Optional[float] = None
     breadth: Optional[float] = None
-    created_at: datetime
-    updated_at: datetime
-    images: List[PropertyImageSchema] = []
-    project_images: List[PropertyProjectImageSchema] = []
-    floorplan_images: List[PropertyFloorplanImageSchema] = []
-    masterplan_images: List[PropertyMasterplanImageSchema] = []
-    features: List[PropertyFeatureSchema] = []
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    images: List[PropertyImageSchema] = Field(default_factory=list)
+    project_images: List[PropertyProjectImageSchema] = Field(default_factory=list)
+    floorplan_images: List[PropertyFloorplanImageSchema] = Field(default_factory=list)
+    masterplan_images: List[PropertyMasterplanImageSchema] = Field(default_factory=list)
+    features: List[PropertyFeatureSchema] = Field(default_factory=list)
     # Additional optional fields that may exist in database
     city: Optional[str] = None
     locality: Optional[str] = None
@@ -247,27 +248,47 @@ class PropertyResponseSchema(BaseModel):
     @field_validator('status', mode='before')
     @classmethod
     def parse_status(cls, v):
-        """Convert status string to PropertyStatus enum"""
+        """Convert status string to PropertyStatus enum - handles legacy DB values"""
+        if not v:
+            return PropertyStatus.SALE
         if isinstance(v, PropertyStatus):
             return v
         if isinstance(v, str):
+            # Normalize: handle spaces, dashes, underscores, case variations
+            normalized = v.lower().replace(" ", "_").replace("-", "_").strip()
+            # Try direct match first
             try:
-                return PropertyStatus(v.lower())
+                return PropertyStatus(normalized)
             except ValueError:
-                return PropertyStatus.SALE  # Default
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in PropertyStatus.__members__.items():
+                    if member_name.lower() == normalized or member_value.value.lower() == normalized:
+                        return member_value
+                # Default fallback
+                return PropertyStatus.SALE
         return PropertyStatus.SALE
 
     @field_validator('type', mode='before')
     @classmethod
     def parse_type(cls, v):
-        """Convert type string to PropertyType enum"""
+        """Convert type string to PropertyType enum - handles legacy DB values"""
+        if not v:
+            return PropertyType.HOUSE
         if isinstance(v, PropertyType):
             return v
         if isinstance(v, str):
+            # Normalize: handle spaces, dashes, underscores, case variations
+            normalized = v.lower().replace(" ", "_").replace("-", "_").strip()
+            # Try direct match first
             try:
-                return PropertyType(v.lower())
+                return PropertyType(normalized)
             except ValueError:
-                return PropertyType.HOUSE  # Default
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in PropertyType.__members__.items():
+                    if member_name.lower() == normalized or member_value.value.lower() == normalized:
+                        return member_value
+                # Default fallback
+                return PropertyType.HOUSE
         return PropertyType.HOUSE
 
     @field_serializer('created_at', 'updated_at')
@@ -295,7 +316,7 @@ class PropertyListResponseSchema(BaseModel):
     location_link: Optional[str] = None
     directions: Optional[str] = None
     primary_image: Optional[str] = None
-    created_at: datetime
+    created_at: Optional[datetime] = None
     # Additional optional fields that may exist in database
     builder: Optional[str] = None
     configuration: Optional[str] = None
@@ -321,27 +342,47 @@ class PropertyListResponseSchema(BaseModel):
     @field_validator('status', mode='before')
     @classmethod
     def parse_status(cls, v):
-        """Convert status string to PropertyStatus enum"""
+        """Convert status string to PropertyStatus enum - handles legacy DB values"""
+        if not v:
+            return PropertyStatus.SALE
         if isinstance(v, PropertyStatus):
             return v
         if isinstance(v, str):
+            # Normalize: handle spaces, dashes, underscores, case variations
+            normalized = v.lower().replace(" ", "_").replace("-", "_").strip()
+            # Try direct match first
             try:
-                return PropertyStatus(v.lower())
+                return PropertyStatus(normalized)
             except ValueError:
-                return PropertyStatus.SALE  # Default
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in PropertyStatus.__members__.items():
+                    if member_name.lower() == normalized or member_value.value.lower() == normalized:
+                        return member_value
+                # Default fallback
+                return PropertyStatus.SALE
         return PropertyStatus.SALE
 
     @field_validator('type', mode='before')
     @classmethod
     def parse_type(cls, v):
-        """Convert type string to PropertyType enum"""
+        """Convert type string to PropertyType enum - handles legacy DB values"""
+        if not v:
+            return PropertyType.HOUSE
         if isinstance(v, PropertyType):
             return v
         if isinstance(v, str):
+            # Normalize: handle spaces, dashes, underscores, case variations
+            normalized = v.lower().replace(" ", "_").replace("-", "_").strip()
+            # Try direct match first
             try:
-                return PropertyType(v.lower())
+                return PropertyType(normalized)
             except ValueError:
-                return PropertyType.HOUSE  # Default
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in PropertyType.__members__.items():
+                    if member_name.lower() == normalized or member_value.value.lower() == normalized:
+                        return member_value
+                # Default fallback
+                return PropertyType.HOUSE
         return PropertyType.HOUSE
 
     @field_serializer('created_at')
@@ -399,8 +440,8 @@ class PartnerResponseSchema(BaseModel):
     description: Optional[str]
     is_active: bool
     display_order: int
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     @field_validator('is_active', mode='before')
     @classmethod
@@ -462,8 +503,20 @@ class TestimonialResponseSchema(BaseModel):
     message: str
     is_approved: bool
     is_featured: bool
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    @field_validator('is_approved', 'is_featured', mode='before')
+    @classmethod
+    def parse_bool(cls, v):
+        """Convert MySQL TINYINT(1) (0/1) to bool"""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, int):
+            return bool(v)
+        if isinstance(v, str):
+            return v.lower() in ('true', '1', 'yes', 'on')
+        return False
 
     @field_serializer('created_at', 'updated_at')
     def serialize_datetime(self, value: datetime, _info):
@@ -482,7 +535,19 @@ class TestimonialPublicSchema(BaseModel):
     rating: Optional[int]
     message: str
     is_featured: bool
-    created_at: datetime
+    created_at: Optional[datetime] = None
+
+    @field_validator('is_featured', mode='before')
+    @classmethod
+    def parse_bool(cls, v):
+        """Convert MySQL TINYINT(1) (0/1) to bool"""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, int):
+            return bool(v)
+        if isinstance(v, str):
+            return v.lower() in ('true', '1', 'yes', 'on')
+        return False
 
     @field_serializer('created_at')
     def serialize_datetime(self, value: datetime, _info):
@@ -531,8 +596,31 @@ class ContactInquiryResponseSchema(BaseModel):
     property_id: Optional[int]
     status: InquiryStatus
     ip_address: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def parse_status(cls, v):
+        """Convert status string to InquiryStatus enum - handles legacy DB values"""
+        if not v:
+            return InquiryStatus.NEW
+        if isinstance(v, InquiryStatus):
+            return v
+        if isinstance(v, str):
+            # Normalize: handle spaces, dashes, underscores, case variations
+            normalized = v.lower().replace(" ", "_").replace("-", "_").strip()
+            # Try direct match first
+            try:
+                return InquiryStatus(normalized)
+            except ValueError:
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in InquiryStatus.__members__.items():
+                    if member_name.lower() == normalized or member_value.value.lower() == normalized:
+                        return member_value
+                # Default fallback
+                return InquiryStatus.NEW
+        return InquiryStatus.NEW
 
     @field_serializer('created_at', 'updated_at')
     def serialize_datetime(self, value: datetime, _info):
@@ -635,8 +723,8 @@ class UserResponseSchema(BaseModel):
     role: UserRole
     is_active: bool
     last_login: Optional[datetime] = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     @field_serializer('created_at', 'updated_at', 'last_login')
     def serialize_datetime(self, value: datetime, _info):
@@ -667,7 +755,7 @@ class VisitorInfoResponseSchema(BaseModel):
     phone: str
     looking_for: Optional[str]
     ip_address: Optional[str] = Field(None, max_length=45)
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     @field_serializer('created_at')
     def serialize_datetime(self, value: datetime, _info):
@@ -703,7 +791,22 @@ class LogResponseSchema(BaseModel):
     ip_address: Optional[str]
     user_agent: Optional[str]
     metadata: Optional[dict]
-    created_at: datetime
+    created_at: Optional[datetime] = None
+
+    @field_validator('metadata', mode='before')
+    @classmethod
+    def parse_metadata(cls, v):
+        """Parse JSON metadata from MySQL string or dict"""
+        if v is None:
+            return None
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, str):
+            try:
+                return json.loads(v) if v else None
+            except (json.JSONDecodeError, TypeError):
+                return None
+        return None
 
     @field_serializer('created_at')
     def serialize_datetime(self, value: datetime, _info):
@@ -781,8 +884,8 @@ class BlogResponseSchema(BaseModel):
     views: int
     is_featured: bool
     is_active: bool
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     @field_validator('tags', mode='before')
     @classmethod
@@ -846,7 +949,7 @@ class SystemMetricsResponseSchema(BaseModel):
     bandwidth_in_mb: float
     bandwidth_out_mb: float
     bandwidth_total_mb: float
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     @field_serializer('created_at')
     def serialize_datetime(self, value: datetime, _info):
@@ -889,7 +992,7 @@ class TemporaryMetricsResponseSchema(BaseModel):
     bandwidth_in_mb: float
     bandwidth_out_mb: float
     bandwidth_total_mb: float
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     @field_serializer('created_at')
     def serialize_datetime(self, value: datetime, _info):
@@ -938,7 +1041,7 @@ class CacheLogResponseSchema(BaseModel):
     ip_address: Optional[str] = None
     user_agent: Optional[str] = None
     metadata: Optional[dict] = None
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     @field_validator('metadata', mode='before')
     @classmethod
@@ -958,27 +1061,47 @@ class CacheLogResponseSchema(BaseModel):
     @field_validator('operation', mode='before')
     @classmethod
     def parse_operation(cls, v):
-        """Convert operation string to CacheOperation enum"""
+        """Convert operation string to CacheOperation enum - handles legacy DB values"""
+        if not v:
+            return CacheOperation.HIT
         if isinstance(v, CacheOperation):
             return v
         if isinstance(v, str):
+            # Normalize: handle spaces, dashes, underscores, case variations
+            normalized = v.lower().replace(" ", "_").replace("-", "_").strip()
+            # Try direct match first
             try:
-                return CacheOperation(v.lower())
+                return CacheOperation(normalized)
             except ValueError:
-                return CacheOperation.HIT  # Default
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in CacheOperation.__members__.items():
+                    if member_name.lower() == normalized or member_value.value.lower() == normalized:
+                        return member_value
+                # Default fallback
+                return CacheOperation.HIT
         return CacheOperation.HIT
 
     @field_validator('status', mode='before')
     @classmethod
     def parse_status(cls, v):
-        """Convert status string to CacheStatus enum"""
+        """Convert status string to CacheStatus enum - handles legacy DB values"""
+        if not v:
+            return CacheStatus.SUCCESS
         if isinstance(v, CacheStatus):
             return v
         if isinstance(v, str):
+            # Normalize: handle spaces, dashes, underscores, case variations
+            normalized = v.lower().replace(" ", "_").replace("-", "_").strip()
+            # Try direct match first
             try:
-                return CacheStatus(v.lower())
+                return CacheStatus(normalized)
             except ValueError:
-                return CacheStatus.SUCCESS  # Default
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in CacheStatus.__members__.items():
+                    if member_name.lower() == normalized or member_value.value.lower() == normalized:
+                        return member_value
+                # Default fallback
+                return CacheStatus.SUCCESS
         return CacheStatus.SUCCESS
 
     @field_serializer('created_at')
@@ -993,7 +1116,7 @@ class CacheLogResponseSchema(BaseModel):
 class CacheLogListResponseSchema(BaseModel):
     """Cache log list response schema with pagination"""
     success: bool
-    logs: List[CacheLogResponseSchema] = []
+    logs: List[CacheLogResponseSchema] = Field(default_factory=list)
     total: int = 0
     page: int = 1
     limit: int = 50

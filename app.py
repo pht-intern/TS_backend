@@ -2340,7 +2340,7 @@ def update_property(property_id: int):
                 (property_id,)
             )
             if not plot_check:
-            abort_with_message(404, "Property not found")
+                abort_with_message(404, "Property not found")
         
         data = request.get_json()
         if not data:
@@ -2490,10 +2490,10 @@ def update_residential_property(property_id: int, data: dict):
                 cursor.execute("DELETE FROM residential_property_features WHERE property_id = %s", (property_id,))
                 for feature_name in data['features']:
                     if feature_name:
-                    cursor.execute(
+                        cursor.execute(
                             "INSERT IGNORE INTO residential_property_features (property_id, feature_name) VALUES (%s, %s)",
-                        (property_id, feature_name)
-                    )
+                            (property_id, feature_name)
+                        )
         
         # Return updated property using get_property endpoint logic
         return get_property(property_id)
@@ -2629,12 +2629,9 @@ def delete_property(property_id: int):
             (property_id,)
         )
         
+        property_category = None
         if residential_check:
-            # Delete from residential_properties (CASCADE will handle images and features)
-            result = execute_update(
-                "DELETE FROM residential_properties WHERE id = %s",
-                (property_id,)
-            )
+            property_category = 'residential'
         else:
             # Check plot_properties
             plot_check = execute_query(
@@ -2643,13 +2640,32 @@ def delete_property(property_id: int):
             )
             
             if plot_check:
-                # Delete from plot_properties (CASCADE will handle images and features)
-                result = execute_update(
-                    "DELETE FROM plot_properties WHERE id = %s",
-                    (property_id,)
-                )
+                property_category = 'plot'
             else:
                 abort_with_message(404, "Property not found")
+        
+        # Manually delete property_features first (no CASCADE constraint)
+        # The property_features table doesn't have foreign keys, so we need to delete manually
+        try:
+            execute_update(
+                "DELETE FROM property_features WHERE property_category = %s AND property_id = %s",
+                (property_category, property_id)
+            )
+        except Exception as e:
+            print(f"Warning: Error deleting property features: {str(e)}")
+            # Continue with property deletion even if features deletion fails
+        
+        # Delete the property itself
+        if property_category == 'residential':
+            result = execute_update(
+                "DELETE FROM residential_properties WHERE id = %s",
+                (property_id,)
+            )
+        else:  # plot
+            result = execute_update(
+                "DELETE FROM plot_properties WHERE id = %s",
+                (property_id,)
+            )
         
         if result == 0:
             abort_with_message(404, "Property not found")
@@ -2659,7 +2675,12 @@ def delete_property(property_id: int):
     except Exception as e:
         print(f"Error deleting property: {str(e)}")
         traceback.print_exc()
-        abort_with_message(500, f"Error deleting property: {str(e)}")
+        # Ensure we always return JSON, even on error
+        try:
+            abort_with_message(500, f"Error deleting property: {str(e)}")
+        except:
+            # Fallback if abort_with_message fails
+            return jsonify({"error": f"Error deleting property: {str(e)}", "success": False}), 500
 
 
 # ============================================
@@ -6925,7 +6946,7 @@ def bad_request(error):
 
 @app.errorhandler(500)
 def internal_error(error):
-    """Handle 500 errors"""
+    """Handle 500 errors - always return JSON"""
     error_msg = "Internal server error"
     if hasattr(error, 'response') and hasattr(error.response, 'data'):
         try:
@@ -6934,12 +6955,15 @@ def internal_error(error):
                 error_msg = error_data['error']
         except:
             pass
-    return jsonify({"error": error_msg, "success": False}), 500
+    # Ensure we always return JSON, never HTML
+    response = make_response(jsonify({"error": error_msg, "success": False}), 500)
+    response.headers['Content-Type'] = 'application/json'
+    return response
 
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    """Handle general exceptions"""
+    """Handle general exceptions - always return JSON"""
     import traceback
     error_trace = traceback.format_exc()
     print(f"Unhandled exception: {str(e)}")
@@ -6951,7 +6975,10 @@ def handle_exception(e):
     
     # Don't expose internal error details in production
     error_detail = str(e) if DEBUG_MODE else "An internal error occurred. Please contact support."
-    return jsonify({"error": "Internal server error", "detail": error_detail, "success": False}), 500
+    # Ensure we always return JSON, never HTML
+    response = make_response(jsonify({"error": "Internal server error", "detail": error_detail, "success": False}), 500)
+    response.headers['Content-Type'] = 'application/json'
+    return response
 
 
 # ============================================
