@@ -1995,14 +1995,44 @@ def get_property(property_id: int):
         if 'description' not in property_data or property_data['description'] is None:
             property_data['description'] = ''
         
+        # Ensure title is not None (required field)
+        if 'title' not in property_data or property_data['title'] is None:
+            # Fallback to property_name or project_name
+            property_data['title'] = property_data.get('property_name') or property_data.get('project_name') or 'Untitled Property'
+            print(f"Warning: Property {property_id} has NULL title, using fallback: {property_data['title']}")
+        
+        # Ensure created_at and updated_at are not None (required fields)
+        if 'created_at' not in property_data or property_data['created_at'] is None:
+            property_data['created_at'] = datetime.now()
+            print(f"Warning: Property {property_id} has NULL created_at, using current time")
+        
+        if 'updated_at' not in property_data or property_data['updated_at'] is None:
+            property_data['updated_at'] = datetime.now()
+            print(f"Warning: Property {property_id} has NULL updated_at, using current time")
+        
+        # Ensure price is not None (required field)
+        if 'price' not in property_data or property_data['price'] is None:
+            print(f"Error: Property {property_id} has NULL price")
+            abort_with_message(500, f"Property {property_id} has invalid data: price is required")
+        
         # Note: listing_type, video_link, and direction are not in the current database schema
         # They will be added as NULL if not present, which is fine for the schema (all optional)
         # These fields can be added to the database schema in a future migration if needed
         
-        response = PropertyResponseSchema(**property_data)
-        return jsonify(response.dict())
+        # Debug: Print property_data before validation
+        print(f"Property {property_id} data before validation: title={property_data.get('title')}, price={property_data.get('price')}, created_at={property_data.get('created_at')}, updated_at={property_data.get('updated_at')}")
+        
+        try:
+            response = PropertyResponseSchema(**property_data)
+            return jsonify(response.dict())
+        except Exception as validation_error:
+            print(f"PropertyResponseSchema validation error for property {property_id}: {str(validation_error)}")
+            print(f"Property data keys: {list(property_data.keys())}")
+            print(f"Property data: {property_data}")
+            traceback.print_exc()
+            abort_with_message(500, f"Error validating property data: {str(validation_error)}")
     except Exception as e:
-        print(f"Error fetching property: {str(e)}")
+        print(f"Error fetching property {property_id}: {str(e)}")
         traceback.print_exc()
         abort_with_message(500, f"Error fetching property: {str(e)}")
 
@@ -2310,7 +2340,7 @@ def update_property(property_id: int):
                 (property_id,)
             )
             if not plot_check:
-                abort_with_message(404, "Property not found")
+            abort_with_message(404, "Property not found")
         
         data = request.get_json()
         if not data:
@@ -2460,10 +2490,10 @@ def update_residential_property(property_id: int, data: dict):
                 cursor.execute("DELETE FROM residential_property_features WHERE property_id = %s", (property_id,))
                 for feature_name in data['features']:
                     if feature_name:
-                        cursor.execute(
+                    cursor.execute(
                             "INSERT IGNORE INTO residential_property_features (property_id, feature_name) VALUES (%s, %s)",
-                            (property_id, feature_name)
-                        )
+                        (property_id, feature_name)
+                    )
         
         # Return updated property using get_property endpoint logic
         return get_property(property_id)
@@ -2865,8 +2895,15 @@ def delete_partner(partner_id: int):
 def get_testimonials():
     """Get all testimonials (public endpoint - only approved)"""
     try:
-        is_approved = request.args.get('is_approved', default='true', type=lambda x: x.lower() == 'true' if x else True)
-        is_featured = request.args.get('is_featured', type=lambda x: x.lower() == 'true' if x else None)
+        # Parse is_approved parameter (default to True for approved testimonials)
+        is_approved_param = request.args.get('is_approved', default='true')
+        is_approved = str(is_approved_param).lower() == 'true'
+        
+        # Parse is_featured parameter (optional)
+        is_featured_param = request.args.get('is_featured')
+        is_featured = None
+        if is_featured_param is not None:
+            is_featured = str(is_featured_param).lower() == 'true'
         
         is_approved_int = 1 if is_approved else 0
         conditions = ["is_approved = %s"]
@@ -2880,7 +2917,12 @@ def get_testimonials():
         where_clause = " AND ".join(conditions)
         query = f"SELECT * FROM testimonials WHERE {where_clause} ORDER BY created_at DESC"
         
+        print(f"Testimonials query: {query}")
+        print(f"Query params: {params}")
+        
         testimonials = execute_query(query, tuple(params))
+        
+        print(f"Found {len(testimonials)} testimonials")
         
         result = []
         for t in testimonials:
@@ -4147,6 +4189,32 @@ def delete_blog(blog_id: int):
         abort_with_message(500, f"Error deleting blog: {str(e)}")
 
 
+@app.route("/api/blogs/<int:blog_id>/increment-views", methods=["POST"])
+def increment_blog_views(blog_id: int):
+    """Increment view count for a blog"""
+    try:
+        # Check if blog exists
+        blog_query = "SELECT id, views FROM blogs WHERE id = %s"
+        blogs = execute_query(blog_query, (blog_id,))
+        
+        if not blogs:
+            abort_with_message(404, "Blog not found")
+        
+        # Increment views
+        update_query = "UPDATE blogs SET views = views + 1 WHERE id = %s"
+        execute_update(update_query, (blog_id,))
+        
+        # Get updated views count
+        updated_blog = execute_query(blog_query, (blog_id,))
+        updated_views = updated_blog[0]['views'] if updated_blog else 0
+        
+        return jsonify({"views": updated_views, "blog_id": blog_id})
+    except Exception as e:
+        print(f"Error incrementing blog views: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error incrementing blog views: {str(e)}")
+
+
 # ============================================
 # ROUTES - CONTACT INQUIRIES
 # ============================================
@@ -5345,19 +5413,21 @@ def get_amenities():
         ]
         
         # Also get any additional amenities that might be in the database
-        query = """
-            SELECT DISTINCT feature_name as name
-            FROM (
-                SELECT feature_name FROM residential_property_features
+        # Use the unified property_features table (as per database schema)
+        db_amenity_names = []
+        try:
+            query = """
+                SELECT DISTINCT feature_name as name
+                FROM property_features
                 WHERE feature_name IS NOT NULL AND feature_name != ''
-                UNION
-                SELECT feature_name FROM plot_property_features
-                WHERE feature_name IS NOT NULL AND feature_name != ''
-            ) as all_features
-            ORDER BY feature_name ASC
-        """
-        db_amenities = execute_query(query)
-        db_amenity_names = [a['name'] for a in db_amenities] if db_amenities else []
+                ORDER BY feature_name ASC
+            """
+            db_amenities = execute_query(query)
+            db_amenity_names = [a['name'] for a in db_amenities] if db_amenities else []
+        except Exception as db_error:
+            # If query fails, just use master list
+            print(f"Warning: Could not fetch amenities from database: {str(db_error)}")
+            db_amenity_names = []
         
         # Combine master list with any additional amenities from database, remove duplicates
         all_amenities = list(set(master_amenities + db_amenity_names))
