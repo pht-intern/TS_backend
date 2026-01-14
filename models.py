@@ -14,6 +14,7 @@ class PropertyType(str, Enum):
     APARTMENT = "apartment"
     HOUSE = "house"
     VILLA = "villa"
+    PLOT = "plot"
 
 
 class PropertyStatus(str, Enum):

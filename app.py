@@ -1958,6 +1958,43 @@ def get_property(property_id: int):
         if 'area' in property_data and property_data['area'] is not None:
             property_data['area'] = int(float(property_data['area']))
         
+        # Ensure bedrooms is an int (required field)
+        if 'bedrooms' in property_data:
+            property_data['bedrooms'] = int(property_data['bedrooms']) if property_data['bedrooms'] is not None else 0
+        else:
+            property_data['bedrooms'] = 0
+        
+        # Ensure type is a valid PropertyType enum value
+        if 'type' in property_data and property_data['type']:
+            type_str = str(property_data['type']).lower()
+            if type_str not in ['apartment', 'house', 'villa', 'plot']:
+                property_data['type'] = 'house'
+            else:
+                property_data['type'] = type_str
+        
+        # Ensure status is a valid PropertyStatus enum value
+        if 'status' in property_data and property_data['status']:
+            status_str = str(property_data['status']).lower()
+            if status_str not in ['sale', 'rent', 'resale', 'new']:
+                property_data['status'] = 'sale'
+            else:
+                property_data['status'] = status_str
+        
+        # Ensure boolean fields are properly converted
+        if 'is_featured' in property_data:
+            property_data['is_featured'] = bool(property_data['is_featured'])
+        else:
+            property_data['is_featured'] = False
+        
+        if 'is_active' in property_data:
+            property_data['is_active'] = bool(property_data['is_active'])
+        else:
+            property_data['is_active'] = True
+        
+        # Ensure description is not None (can be empty string)
+        if 'description' not in property_data or property_data['description'] is None:
+            property_data['description'] = ''
+        
         # Note: listing_type, video_link, and direction are not in the current database schema
         # They will be added as NULL if not present, which is fine for the schema (all optional)
         # These fields can be added to the database schema in a future migration if needed
@@ -1991,10 +2028,35 @@ def create_residential_property():
         locality = data.get('locality')
         property_name = data.get('property_name')
         unit_type = data.get('unit_type', 'bhk')
-        bedrooms = int(data.get('bedrooms', 1))
-        buildup_area = float(data.get('buildup_area', 0))
-        carpet_area = float(data.get('carpet_area', 0))
-        price = float(data.get('price', 0))
+        
+        # Handle numeric fields with None checks
+        # Note: bedrooms, buildup_area, and carpet_area are NOT NULL in database
+        bedrooms_val = data.get('bedrooms')
+        bedrooms = int(bedrooms_val) if bedrooms_val is not None and bedrooms_val != '' else 1
+        
+        buildup_area_val = data.get('buildup_area')
+        if buildup_area_val is None or buildup_area_val == '':
+            buildup_area = 0.0  # NOT NULL field, must have a value
+        else:
+            try:
+                buildup_area = float(buildup_area_val)
+            except (ValueError, TypeError):
+                buildup_area = 0.0
+        
+        carpet_area_val = data.get('carpet_area')
+        if carpet_area_val is None or carpet_area_val == '':
+            carpet_area = 0.0  # NOT NULL field, must have a value
+        else:
+            try:
+                carpet_area = float(carpet_area_val)
+            except (ValueError, TypeError):
+                carpet_area = 0.0
+        
+        price_val = data.get('price')
+        if price_val is None or price_val == 0:
+            abort_with_message(400, "Price is required and must be greater than 0")
+        price = float(price_val)
+        
         price_text = data.get('price_text')
         price_negotiable = 1 if data.get('price_negotiable') else 0
         price_includes_registration = 1 if data.get('price_includes_registration') else 0
@@ -2008,24 +2070,72 @@ def create_residential_property():
         description = data.get('description')
         location_link = data.get('location_link')
         directions = data.get('directions')
-        length = data.get('length')
-        breadth = data.get('breadth')
-        bathrooms = float(data.get('bathrooms', 0))
-        super_built_up_area = data.get('super_built_up_area')
+        
+        length_val = data.get('length')
+        length = float(length_val) if length_val is not None else None
+        
+        breadth_val = data.get('breadth')
+        breadth = float(breadth_val) if breadth_val is not None else None
+        
+        bathrooms_val = data.get('bathrooms')
+        if bathrooms_val is None or bathrooms_val == '':
+            bathrooms = 0.0  # DEFAULT 0 in database
+        else:
+            try:
+                bathrooms = float(bathrooms_val)
+            except (ValueError, TypeError):
+                bathrooms = 0.0
+        
+        super_built_up_area_val = data.get('super_built_up_area')
+        super_built_up_area = float(super_built_up_area_val) if super_built_up_area_val is not None else None
+        
         builder = data.get('builder')
         configuration = data.get('configuration')
-        total_flats = data.get('total_flats')
-        total_floors = data.get('total_floors')
-        total_acres = data.get('total_acres')
+        
+        total_flats_val = data.get('total_flats')
+        total_flats = int(total_flats_val) if total_flats_val is not None else None
+        
+        total_floors_val = data.get('total_floors')
+        total_floors = int(total_floors_val) if total_floors_val is not None else None
+        
+        total_acres_val = data.get('total_acres')
+        total_acres = float(total_acres_val) if total_acres_val is not None else None
         video_link = data.get('video_link')  # Not in DB schema yet
         direction = data.get('direction')  # Property facing (not in DB schema yet)
         is_featured = 1 if data.get('is_featured') else 0
         is_active = 1 if data.get('is_active', True) else 0
-        images = data.get('images', [])
-        features = data.get('features', []) or data.get('amenities', [])
+        
+        # Handle images - can be null, empty list, or list of URLs
+        images_raw = data.get('images')
+        if images_raw is None:
+            images = []
+        elif isinstance(images_raw, list):
+            images = images_raw
+        else:
+            images = []
+        
+        # Handle features - can be null, empty list, or list of strings
+        features_raw = data.get('features') or data.get('amenities')
+        if features_raw is None:
+            features = []
+        elif isinstance(features_raw, list):
+            features = [f for f in features_raw if f]  # Filter out empty strings
+        else:
+            features = []
         
         if not city or not locality or not property_name:
             abort_with_message(400, "City, locality, and property_name are required")
+        
+        # Validate unit_type against database CHECK constraint
+        if unit_type not in ['rk', 'bhk', '4plus']:
+            abort_with_message(400, f"Invalid unit_type: {unit_type}. Must be one of: rk, bhk, 4plus")
+        
+        # Validate property_type against database CHECK constraint
+        if property_type not in ['house', 'villa', 'apartment']:
+            abort_with_message(400, f"Invalid type: {property_type}. Must be one of: house, villa, apartment")
+        
+        # Debug logging (remove in production if needed)
+        print(f"Creating residential property: city={city}, locality={locality}, property_name={property_name}, type={property_type}, status={status}, price={price}")
         
         insert_query = """
             INSERT INTO residential_properties (
@@ -2082,10 +2192,22 @@ def create_plot_property():
         city = data.get('city')
         locality = data.get('locality')
         project_name = data.get('project_name')
-        plot_area = float(data.get('plot_area', 0))
-        plot_length = float(data.get('plot_length', 0))
-        plot_breadth = float(data.get('plot_breadth', 0))
-        price = float(data.get('price', 0))
+        
+        # Handle numeric fields with None checks
+        plot_area_val = data.get('plot_area')
+        plot_area = float(plot_area_val) if plot_area_val is not None else 0
+        
+        plot_length_val = data.get('plot_length')
+        plot_length = float(plot_length_val) if plot_length_val is not None else 0
+        
+        plot_breadth_val = data.get('plot_breadth')
+        plot_breadth = float(plot_breadth_val) if plot_breadth_val is not None else 0
+        
+        price_val = data.get('price')
+        if price_val is None or price_val == 0:
+            abort_with_message(400, "Price is required and must be greater than 0")
+        price = float(price_val)
+        
         price_text = data.get('price_text')
         price_negotiable = 1 if data.get('price_negotiable') else 0
         price_includes_registration = 1 if data.get('price_includes_registration') else 0
@@ -2099,13 +2221,32 @@ def create_plot_property():
         location_link = data.get('location_link')
         directions = data.get('directions')
         builder = data.get('builder')
-        total_acres = data.get('total_acres')
+        
+        total_acres_val = data.get('total_acres')
+        total_acres = float(total_acres_val) if total_acres_val is not None else None
+        
         video_link = data.get('video_link')  # Not in DB schema yet
         direction = data.get('direction')  # Property facing (not in DB schema yet)
         is_featured = 1 if data.get('is_featured') else 0
         is_active = 1 if data.get('is_active', True) else 0
-        images = data.get('images', [])
-        features = data.get('features', []) or data.get('amenities', [])
+        
+        # Handle images - can be null, empty list, or list of URLs
+        images_raw = data.get('images')
+        if images_raw is None:
+            images = []
+        elif isinstance(images_raw, list):
+            images = images_raw
+        else:
+            images = []
+        
+        # Handle features - can be null, empty list, or list of strings
+        features_raw = data.get('features') or data.get('amenities')
+        if features_raw is None:
+            features = []
+        elif isinstance(features_raw, list):
+            features = [f for f in features_raw if f]  # Filter out empty strings
+        else:
+            features = []
         
         if not city or not locality or not project_name:
             abort_with_message(400, "City, locality, and project_name are required")
@@ -2153,110 +2294,297 @@ def create_plot_property():
 @app.route("/api/properties/<int:property_id>", methods=["PUT"])
 @require_admin_auth
 def update_property(property_id: int):
-    """Update a property"""
+    """Update a property - handles both residential and plot properties"""
     try:
-        existing = execute_query("SELECT id FROM properties WHERE id = %s", (property_id,))
-        if not existing:
-            abort_with_message(404, "Property not found")
+        # Check which table contains the property
+        residential_check = execute_query(
+            "SELECT id FROM residential_properties WHERE id = %s",
+            (property_id,)
+        )
+        
+        is_residential = bool(residential_check)
+        
+        if not is_residential:
+            plot_check = execute_query(
+                "SELECT id FROM plot_properties WHERE id = %s",
+                (property_id,)
+            )
+            if not plot_check:
+                abort_with_message(404, "Property not found")
         
         data = request.get_json()
         if not data:
             abort_with_message(400, "Invalid request data")
         
-        property_data = PropertyUpdateSchema(**data)
+        # Determine property type from data
+        property_type = data.get('type', 'apartment')
+        is_plot = property_type == 'plot' or (isinstance(property_type, str) and 'plot' in property_type.lower())
         
-        # Build update query
-        updates = []
-        params = []
-        
-        if property_data.title is not None:
-            updates.append("title = %s")
-            params.append(property_data.title)
-        if property_data.location is not None:
-            updates.append("location = %s")
-            params.append(property_data.location)
-        if property_data.price is not None:
-            updates.append("price = %s")
-            params.append(property_data.price)
-        if property_data.price_text is not None:
-            updates.append("price_text = %s")
-            params.append(property_data.price_text)
-        if property_data.type is not None:
-            updates.append("type = %s")
-            params.append(property_data.type.value)
-        if property_data.bedrooms is not None:
-            updates.append("bedrooms = %s")
-            params.append(property_data.bedrooms)
-        if property_data.bathrooms is not None:
-            updates.append("bathrooms = %s")
-            params.append(property_data.bathrooms)
-        if property_data.area is not None:
-            updates.append("area = %s")
-            params.append(property_data.area)
-        if property_data.status is not None:
-            updates.append("status = %s")
-            params.append(property_data.status.value)
-        if property_data.description is not None:
-            updates.append("description = %s")
-            params.append(property_data.description)
-        if property_data.is_featured is not None:
-            updates.append("is_featured = %s")
-            params.append(property_data.is_featured)
-        if property_data.is_active is not None:
-            updates.append("is_active = %s")
-            params.append(property_data.is_active)
-        
-        if updates:
-            params.append(property_id)
-            update_query = f"UPDATE properties SET {', '.join(updates)} WHERE id = %s"
-            execute_update(update_query, tuple(params))
-        
-        # Update images if provided
-        if property_data.images is not None:
-            processed_images = process_image_urls(property_data.images, FRONTEND_DIR)
-            with get_db_cursor() as cursor:
-                cursor.execute("DELETE FROM property_images WHERE property_id = %s", (property_id,))
-                for idx, image_url in enumerate(processed_images):
-                    cursor.execute(
-                        "INSERT INTO property_images (property_id, image_url, image_order, is_primary) VALUES (%s, %s, %s, %s)",
-                        (property_id, image_url, idx, 1 if idx == 0 else 0)
-                    )
-        
-        # Update features if provided
-        if property_data.features is not None:
-            with get_db_cursor() as cursor:
-                cursor.execute("DELETE FROM property_features WHERE property_id = %s", (property_id,))
-                for feature_name in property_data.features:
-                    cursor.execute(
-                        "INSERT IGNORE INTO property_features (property_id, feature_name) VALUES (%s, %s)",
-                        (property_id, feature_name)
-                    )
-        
-        # Return updated property
-        property_query = "SELECT * FROM properties WHERE id = %s"
-        properties = execute_query(property_query, (property_id,))
-        property_data_dict = dict(properties[0])
-        
-        images_query = "SELECT * FROM property_images WHERE property_id = %s ORDER BY image_order, created_at"
-        images = execute_query(images_query, (property_id,))
-        normalized_images = []
-        for img in images:
-            img_dict = dict(img)
-            if 'image_url' in img_dict and img_dict['image_url']:
-                img_dict['image_url'] = normalize_image_url(img_dict['image_url'])
-            normalized_images.append(img_dict)
-        property_data_dict['images'] = normalized_images
-        
-        features_query = "SELECT * FROM property_features WHERE property_id = %s ORDER BY feature_name"
-        features = execute_query(features_query, (property_id,))
-        property_data_dict['features'] = [dict(feat) for feat in features]
-        
-        response = PropertyResponseSchema(**property_data_dict)
-        return jsonify(response.dict())
+        if is_plot:
+            # Update plot property
+            return update_plot_property(property_id, data)
+        else:
+            # Update residential property
+            return update_residential_property(property_id, data)
     except Exception as e:
         print(f"Error updating property: {str(e)}")
         traceback.print_exc()
         abort_with_message(500, f"Error updating property: {str(e)}")
+
+
+def update_residential_property(property_id: int, data: dict):
+    """Update a residential property"""
+    try:
+        # Check if property exists
+        existing = execute_query("SELECT id FROM residential_properties WHERE id = %s", (property_id,))
+        if not existing:
+            abort_with_message(404, "Residential property not found")
+        
+        # Build update query for residential_properties
+        updates = []
+        params = []
+        
+        # Map frontend fields to database fields
+        if 'city' in data and data['city']:
+            updates.append("city = %s")
+            params.append(data['city'])
+        if 'locality' in data and data['locality']:
+            updates.append("locality = %s")
+            params.append(data['locality'])
+        if 'property_name' in data and data['property_name']:
+            updates.append("property_name = %s")
+            params.append(data['property_name'])
+        elif 'title' in data and data['title']:
+            updates.append("property_name = %s")
+            params.append(data['title'])
+        if 'price' in data and data['price'] is not None:
+            updates.append("price = %s")
+            params.append(float(data['price']))
+        if 'price_text' in data and data['price_text']:
+            updates.append("price_text = %s")
+            params.append(data['price_text'])
+        if 'price_negotiable' in data and data['price_negotiable'] is not None:
+            updates.append("price_negotiable = %s")
+            params.append(bool(data['price_negotiable']))
+        if 'price_includes_registration' in data and data['price_includes_registration'] is not None:
+            updates.append("price_includes_registration = %s")
+            params.append(bool(data['price_includes_registration']))
+        if 'type' in data and data['type']:
+            updates.append("type = %s")
+            params.append(data['type'])
+        if 'unit_type' in data and data['unit_type']:
+            updates.append("unit_type = %s")
+            params.append(data['unit_type'])
+        if 'bedrooms' in data and data['bedrooms'] is not None:
+            updates.append("bedrooms = %s")
+            params.append(int(data['bedrooms']))
+        if 'bathrooms' in data and data['bathrooms'] is not None:
+            updates.append("bathrooms = %s")
+            params.append(float(data['bathrooms']))
+        if 'buildup_area' in data and data['buildup_area'] is not None:
+            updates.append("buildup_area = %s")
+            params.append(float(data['buildup_area']))
+        if 'carpet_area' in data and data['carpet_area'] is not None:
+            updates.append("carpet_area = %s")
+            params.append(float(data['carpet_area']))
+        if 'super_built_up_area' in data and data['super_built_up_area'] is not None:
+            updates.append("super_built_up_area = %s")
+            params.append(float(data['super_built_up_area']))
+        if 'status' in data and data['status']:
+            updates.append("status = %s")
+            params.append(data['status'])
+        if 'property_status' in data and data['property_status']:
+            updates.append("property_status = %s")
+            params.append(data['property_status'])
+        if 'description' in data and data['description']:
+            updates.append("description = %s")
+            params.append(data['description'])
+        if 'location_link' in data and data['location_link']:
+            updates.append("location_link = %s")
+            params.append(data['location_link'])
+        if 'directions' in data and data['directions']:
+            updates.append("directions = %s")
+            params.append(data['directions'])
+        if 'length' in data and data['length'] is not None:
+            updates.append("length = %s")
+            params.append(float(data['length']))
+        if 'breadth' in data and data['breadth'] is not None:
+            updates.append("breadth = %s")
+            params.append(float(data['breadth']))
+        if 'builder' in data and data['builder']:
+            updates.append("builder = %s")
+            params.append(data['builder'])
+        if 'configuration' in data and data['configuration']:
+            updates.append("configuration = %s")
+            params.append(data['configuration'])
+        if 'total_flats' in data and data['total_flats'] is not None:
+            updates.append("total_flats = %s")
+            params.append(int(data['total_flats']))
+        if 'total_floors' in data and data['total_floors'] is not None:
+            updates.append("total_floors = %s")
+            params.append(int(data['total_floors']))
+        if 'total_acres' in data and data['total_acres'] is not None:
+            updates.append("total_acres = %s")
+            params.append(float(data['total_acres']))
+        if 'is_featured' in data and data['is_featured'] is not None:
+            updates.append("is_featured = %s")
+            params.append(bool(data['is_featured']))
+        if 'is_active' in data and data['is_active'] is not None:
+            updates.append("is_active = %s")
+            params.append(bool(data['is_active']))
+        
+        if updates:
+            params.append(property_id)
+            update_query = f"UPDATE residential_properties SET {', '.join(updates)} WHERE id = %s"
+            execute_update(update_query, tuple(params))
+        
+        # Update images if provided
+        if 'images' in data and data['images'] is not None:
+            processed_images = process_image_urls(data['images'], FRONTEND_DIR)
+            with get_db_cursor() as cursor:
+                # Delete existing images
+                cursor.execute("DELETE FROM residential_property_project_images WHERE property_id = %s", (property_id,))
+                cursor.execute("DELETE FROM residential_property_floorplan_images WHERE property_id = %s", (property_id,))
+                cursor.execute("DELETE FROM residential_property_masterplan_images WHERE property_id = %s", (property_id,))
+                
+                # Insert new images (default to project_images)
+                for idx, image_url in enumerate(processed_images):
+                    cursor.execute(
+                        "INSERT INTO residential_property_project_images (property_id, image_url, image_order) VALUES (%s, %s, %s)",
+                        (property_id, image_url, idx)
+                    )
+        
+        # Update features if provided
+        if 'features' in data and data['features'] is not None:
+            with get_db_cursor() as cursor:
+                cursor.execute("DELETE FROM residential_property_features WHERE property_id = %s", (property_id,))
+                for feature_name in data['features']:
+                    if feature_name:
+                        cursor.execute(
+                            "INSERT IGNORE INTO residential_property_features (property_id, feature_name) VALUES (%s, %s)",
+                            (property_id, feature_name)
+                        )
+        
+        # Return updated property using get_property endpoint logic
+        return get_property(property_id)
+    except Exception as e:
+        print(f"Error updating residential property: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error updating residential property: {str(e)}")
+
+
+def update_plot_property(property_id: int, data: dict):
+    """Update a plot property"""
+    try:
+        # Check if property exists
+        existing = execute_query("SELECT id FROM plot_properties WHERE id = %s", (property_id,))
+        if not existing:
+            abort_with_message(404, "Plot property not found")
+        
+        # Build update query for plot_properties
+        updates = []
+        params = []
+        
+        # Map frontend fields to database fields
+        if 'city' in data and data['city']:
+            updates.append("city = %s")
+            params.append(data['city'])
+        if 'locality' in data and data['locality']:
+            updates.append("locality = %s")
+            params.append(data['locality'])
+        if 'project_name' in data and data['project_name']:
+            updates.append("project_name = %s")
+            params.append(data['project_name'])
+        elif 'title' in data and data['title']:
+            updates.append("project_name = %s")
+            params.append(data['title'])
+        if 'plot_area' in data and data['plot_area'] is not None:
+            updates.append("plot_area = %s")
+            params.append(float(data['plot_area']))
+        if 'plot_length' in data and data['plot_length'] is not None:
+            updates.append("plot_length = %s")
+            params.append(float(data['plot_length']))
+        if 'plot_breadth' in data and data['plot_breadth'] is not None:
+            updates.append("plot_breadth = %s")
+            params.append(float(data['plot_breadth']))
+        if 'price' in data and data['price'] is not None:
+            updates.append("price = %s")
+            params.append(float(data['price']))
+        if 'price_text' in data and data['price_text']:
+            updates.append("price_text = %s")
+            params.append(data['price_text'])
+        if 'price_negotiable' in data and data['price_negotiable'] is not None:
+            updates.append("price_negotiable = %s")
+            params.append(bool(data['price_negotiable']))
+        if 'price_includes_registration' in data and data['price_includes_registration'] is not None:
+            updates.append("price_includes_registration = %s")
+            params.append(bool(data['price_includes_registration']))
+        if 'status' in data and data['status']:
+            updates.append("status = %s")
+            params.append(data['status'])
+        if 'property_status' in data and data['property_status']:
+            updates.append("property_status = %s")
+            params.append(data['property_status'])
+        if 'description' in data and data['description']:
+            updates.append("description = %s")
+            params.append(data['description'])
+        if 'location_link' in data and data['location_link']:
+            updates.append("location_link = %s")
+            params.append(data['location_link'])
+        if 'directions' in data and data['directions']:
+            updates.append("directions = %s")
+            params.append(data['directions'])
+        if 'builder' in data and data['builder']:
+            updates.append("builder = %s")
+            params.append(data['builder'])
+        if 'total_acres' in data and data['total_acres'] is not None:
+            updates.append("total_acres = %s")
+            params.append(float(data['total_acres']))
+        if 'is_featured' in data and data['is_featured'] is not None:
+            updates.append("is_featured = %s")
+            params.append(bool(data['is_featured']))
+        if 'is_active' in data and data['is_active'] is not None:
+            updates.append("is_active = %s")
+            params.append(bool(data['is_active']))
+        
+        if updates:
+            params.append(property_id)
+            update_query = f"UPDATE plot_properties SET {', '.join(updates)} WHERE id = %s"
+            execute_update(update_query, tuple(params))
+        
+        # Update images if provided
+        if 'images' in data and data['images'] is not None:
+            processed_images = process_image_urls(data['images'], FRONTEND_DIR)
+            with get_db_cursor() as cursor:
+                # Delete existing images
+                cursor.execute("DELETE FROM plot_property_project_images WHERE property_id = %s", (property_id,))
+                cursor.execute("DELETE FROM plot_property_floorplan_images WHERE property_id = %s", (property_id,))
+                cursor.execute("DELETE FROM plot_property_masterplan_images WHERE property_id = %s", (property_id,))
+                
+                # Insert new images (default to project_images)
+                for idx, image_url in enumerate(processed_images):
+                    cursor.execute(
+                        "INSERT INTO plot_property_project_images (property_id, image_url, image_order) VALUES (%s, %s, %s)",
+                        (property_id, image_url, idx)
+                    )
+        
+        # Update features if provided
+        if 'features' in data and data['features'] is not None:
+            with get_db_cursor() as cursor:
+                cursor.execute("DELETE FROM plot_property_features WHERE property_id = %s", (property_id,))
+                for feature_name in data['features']:
+                    if feature_name:
+                        cursor.execute(
+                            "INSERT IGNORE INTO plot_property_features (property_id, feature_name) VALUES (%s, %s)",
+                            (property_id, feature_name)
+                        )
+        
+        # Return updated property using get_property endpoint logic
+        return get_property(property_id)
+    except Exception as e:
+        print(f"Error updating plot property: {str(e)}")
+        traceback.print_exc()
+        abort_with_message(500, f"Error updating plot property: {str(e)}")
 
 
 @app.route("/api/properties/<int:property_id>", methods=["DELETE"])
@@ -2404,8 +2732,26 @@ def create_partner():
             partner_id = cursor.lastrowid
         
         partners = execute_query("SELECT * FROM partners WHERE id = %s", (partner_id,))
+        if not partners:
+            abort_with_message(500, "Partner not found after creation")
+        
         partner_dict = dict(partners[0])
-        if 'logo_url' in partner_dict:
+        
+        # Ensure all required fields are present (same as GET endpoint)
+        if 'is_active' not in partner_dict:
+            partner_dict['is_active'] = True
+        elif isinstance(partner_dict['is_active'], int):
+            partner_dict['is_active'] = bool(partner_dict['is_active'])
+        if 'display_order' not in partner_dict:
+            partner_dict['display_order'] = 0
+        if 'description' not in partner_dict:
+            partner_dict['description'] = None
+        if 'created_at' not in partner_dict:
+            partner_dict['created_at'] = None
+        if 'updated_at' not in partner_dict:
+            partner_dict['updated_at'] = None
+        
+        if 'logo_url' in partner_dict and partner_dict['logo_url']:
             partner_dict['logo_url'] = normalize_image_url(partner_dict['logo_url'])
         
         response = PartnerResponseSchema(**partner_dict)
@@ -2465,8 +2811,26 @@ def update_partner(partner_id: int):
             execute_update(update_query, tuple(params))
         
         partners = execute_query("SELECT * FROM partners WHERE id = %s", (partner_id,))
+        if not partners:
+            abort_with_message(404, "Partner not found after update")
+        
         partner_dict = dict(partners[0])
-        if 'logo_url' in partner_dict:
+        
+        # Ensure all required fields are present (same as GET endpoint)
+        if 'is_active' not in partner_dict:
+            partner_dict['is_active'] = True
+        elif isinstance(partner_dict['is_active'], int):
+            partner_dict['is_active'] = bool(partner_dict['is_active'])
+        if 'display_order' not in partner_dict:
+            partner_dict['display_order'] = 0
+        if 'description' not in partner_dict:
+            partner_dict['description'] = None
+        if 'created_at' not in partner_dict:
+            partner_dict['created_at'] = None
+        if 'updated_at' not in partner_dict:
+            partner_dict['updated_at'] = None
+        
+        if 'logo_url' in partner_dict and partner_dict['logo_url']:
             partner_dict['logo_url'] = normalize_image_url(partner_dict['logo_url'])
         
         response = PartnerResponseSchema(**partner_dict)
@@ -4950,8 +5314,37 @@ def bulk_update_cities():
 
 @app.route("/api/amenities", methods=["GET"])
 def get_amenities():
-    """Get all unique amenities/features from properties (public endpoint)"""
+    """Get all available amenities/features (master list + any from properties)"""
     try:
+        # Master list of all possible amenities
+        master_amenities = [
+            "club_house",
+            "security",
+            "24hr_backup",
+            "rain_water_harvesting",
+            "maintenance_staff",
+            "intercom",
+            "garden",
+            "community_hall",
+            "electricity_full",
+            "electricity_partial",
+            "basketball_court",
+            "play_area",
+            "badminton_court",
+            "swimming_pool",
+            "tennis_court",
+            "gymnasium",
+            "indoor_games",
+            "banks_atm",
+            "cafeteria",
+            "library",
+            "health_facilities",
+            "recreation_facilities",
+            "wifi_broadband",
+            "temple"
+        ]
+        
+        # Also get any additional amenities that might be in the database
         query = """
             SELECT DISTINCT feature_name as name
             FROM (
@@ -4963,10 +5356,16 @@ def get_amenities():
             ) as all_features
             ORDER BY feature_name ASC
         """
-        amenities = execute_query(query)
+        db_amenities = execute_query(query)
+        db_amenity_names = [a['name'] for a in db_amenities] if db_amenities else []
+        
+        # Combine master list with any additional amenities from database, remove duplicates
+        all_amenities = list(set(master_amenities + db_amenity_names))
+        all_amenities.sort()
+        
         data = {
             "success": True,
-            "amenities": [a['name'] for a in amenities] if amenities else []
+            "amenities": all_amenities
         }
         
         # Support JSONP if callback parameter is provided
