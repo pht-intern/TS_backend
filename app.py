@@ -4833,6 +4833,50 @@ def get_page_visit_stats():
 # ROUTES - ADMIN SETTINGS (Cities, Categories, Unit Types)
 # ============================================
 
+@app.route("/api/cities", methods=["GET"])
+def get_active_cities():
+    """Get all active cities (public endpoint)"""
+    try:
+        query = """
+            SELECT 
+                c.name,
+                c.state
+            FROM cities c
+            WHERE c.is_active = 1
+            ORDER BY c.state, c.name
+        """
+        cities = execute_query(query)
+        data = {
+            "success": True,
+            "cities": cities or []
+        }
+        
+        # Support JSONP if callback parameter is provided
+        callback = request.args.get('callback')
+        if callback:
+            # Validate callback name to prevent XSS
+            if re.match(r'^[a-zA-Z_$][a-zA-Z0-9_$]*$', callback):
+                response = make_response(f"{callback}({json.dumps(data)});")
+                response.headers['Content-Type'] = 'application/javascript'
+                return response
+            else:
+                # Invalid callback name, return regular JSON
+                return jsonify({'error': 'Invalid callback parameter'}), 400
+        
+        return jsonify(data)
+    except Exception as e:
+        print(f"Error fetching active cities: {str(e)}")
+        traceback.print_exc()
+        # Support JSONP even for errors
+        callback = request.args.get('callback')
+        if callback:
+            if re.match(r'^[a-zA-Z_$][a-zA-Z0-9_$]*$', callback):
+                response = make_response(f"{callback}({{'success': False, 'cities': []}});")
+                response.headers['Content-Type'] = 'application/javascript'
+                return response
+        abort_with_message(500, f"Error fetching active cities: {str(e)}")
+
+
 @app.route("/api/admin/cities", methods=["GET"])
 @require_admin_auth
 def get_cities():
@@ -4904,6 +4948,97 @@ def bulk_update_cities():
         abort_with_message(500, f"Error updating cities: {str(e)}")
 
 
+@app.route("/api/amenities", methods=["GET"])
+def get_amenities():
+    """Get all unique amenities/features from properties (public endpoint)"""
+    try:
+        query = """
+            SELECT DISTINCT feature_name as name
+            FROM (
+                SELECT feature_name FROM residential_property_features
+                WHERE feature_name IS NOT NULL AND feature_name != ''
+                UNION
+                SELECT feature_name FROM plot_property_features
+                WHERE feature_name IS NOT NULL AND feature_name != ''
+            ) as all_features
+            ORDER BY feature_name ASC
+        """
+        amenities = execute_query(query)
+        data = {
+            "success": True,
+            "amenities": [a['name'] for a in amenities] if amenities else []
+        }
+        
+        # Support JSONP if callback parameter is provided
+        callback = request.args.get('callback')
+        if callback:
+            # Validate callback name to prevent XSS
+            if re.match(r'^[a-zA-Z_$][a-zA-Z0-9_$]*$', callback):
+                response = make_response(f"{callback}({json.dumps(data)});")
+                response.headers['Content-Type'] = 'application/javascript'
+                return response
+            else:
+                # Invalid callback name, return regular JSON
+                return jsonify({'error': 'Invalid callback parameter'}), 400
+        
+        return jsonify(data)
+    except Exception as e:
+        print(f"Error fetching amenities: {str(e)}")
+        traceback.print_exc()
+        # Support JSONP even for errors
+        callback = request.args.get('callback')
+        if callback:
+            if re.match(r'^[a-zA-Z_$][a-zA-Z0-9_$]*$', callback):
+                response = make_response(f"{callback}({{'success': False, 'amenities': []}});")
+                response.headers['Content-Type'] = 'application/javascript'
+                return response
+        abort_with_message(500, f"Error fetching amenities: {str(e)}")
+
+
+@app.route("/api/categories", methods=["GET"])
+def get_active_categories():
+    """Get all active categories (public endpoint)"""
+    try:
+        query = """
+            SELECT 
+                c.name,
+                c.display_name
+            FROM categories c
+            WHERE c.is_active = 1
+            ORDER BY c.name
+        """
+        categories = execute_query(query)
+        data = {
+            "success": True,
+            "categories": categories or []
+        }
+        
+        # Support JSONP if callback parameter is provided
+        callback = request.args.get('callback')
+        if callback:
+            # Validate callback name to prevent XSS
+            if re.match(r'^[a-zA-Z_$][a-zA-Z0-9_$]*$', callback):
+                response = make_response(f"{callback}({json.dumps(data)});")
+                response.headers['Content-Type'] = 'application/javascript'
+                return response
+            else:
+                # Invalid callback name, return regular JSON
+                return jsonify({'error': 'Invalid callback parameter'}), 400
+        
+        return jsonify(data)
+    except Exception as e:
+        print(f"Error fetching active categories: {str(e)}")
+        traceback.print_exc()
+        # Support JSONP even for errors
+        callback = request.args.get('callback')
+        if callback:
+            if re.match(r'^[a-zA-Z_$][a-zA-Z0-9_$]*$', callback):
+                response = make_response(f"{callback}({{'success': False, 'categories': []}});")
+                response.headers['Content-Type'] = 'application/javascript'
+                return response
+        abort_with_message(500, f"Error fetching active categories: {str(e)}")
+
+
 @app.route("/api/admin/categories", methods=["GET"])
 @require_admin_auth
 def get_categories():
@@ -4920,6 +5055,8 @@ def get_categories():
                         (SELECT COUNT(*) FROM residential_properties WHERE is_active = 1)
                     WHEN c.name = 'plot' THEN 
                         (SELECT COUNT(*) FROM plot_properties WHERE is_active = 1)
+                    WHEN c.name = 'commercial' THEN 
+                        (SELECT COUNT(*) FROM residential_properties WHERE is_active = 1 AND type IN ('office-space', 'warehouse', 'showrooms'))
                     ELSE 0
                 END as properties_count
             FROM categories c
@@ -5046,6 +5183,51 @@ def delete_category(category_id):
         print(f"Error deleting category: {str(e)}")
         traceback.print_exc()
         abort_with_message(500, f"Error deleting category: {str(e)}")
+
+
+@app.route("/api/unit-types", methods=["GET"])
+def get_active_unit_types():
+    """Get all active unit types (public endpoint)"""
+    try:
+        query = """
+            SELECT 
+                ut.name,
+                ut.display_name,
+                ut.bedrooms
+            FROM unit_types ut
+            WHERE ut.is_active = 1
+            ORDER BY ut.bedrooms, ut.name
+        """
+        unit_types = execute_query(query)
+        data = {
+            "success": True,
+            "unit_types": unit_types or []
+        }
+        
+        # Support JSONP if callback parameter is provided
+        callback = request.args.get('callback')
+        if callback:
+            # Validate callback name to prevent XSS
+            if re.match(r'^[a-zA-Z_$][a-zA-Z0-9_$]*$', callback):
+                response = make_response(f"{callback}({json.dumps(data)});")
+                response.headers['Content-Type'] = 'application/javascript'
+                return response
+            else:
+                # Invalid callback name, return regular JSON
+                return jsonify({'error': 'Invalid callback parameter'}), 400
+        
+        return jsonify(data)
+    except Exception as e:
+        print(f"Error fetching active unit types: {str(e)}")
+        traceback.print_exc()
+        # Support JSONP even for errors
+        callback = request.args.get('callback')
+        if callback:
+            if re.match(r'^[a-zA-Z_$][a-zA-Z0-9_$]*$', callback):
+                response = make_response(f"{callback}({{'success': False, 'unit_types': []}});")
+                response.headers['Content-Type'] = 'application/javascript'
+                return response
+        abort_with_message(500, f"Error fetching active unit types: {str(e)}")
 
 
 @app.route("/api/admin/unit-types", methods=["GET"])
