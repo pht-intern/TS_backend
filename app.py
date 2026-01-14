@@ -3404,22 +3404,9 @@ def get_cache_logs():
         
         logs = execute_query(query, tuple(params))
         
-        # Parse JSON metadata and convert to response schema
+        # Schema validators handle MySQL type conversions automatically
         cache_logs = []
         for log in logs:
-            # Parse JSON metadata if present
-            if log.get('metadata'):
-                try:
-                    if isinstance(log['metadata'], str):
-                        log['metadata'] = json.loads(log['metadata'])
-                except (json.JSONDecodeError, TypeError):
-                    log['metadata'] = None
-            
-            # Convert datetime to string if needed
-            if log.get('created_at') and isinstance(log['created_at'], datetime):
-                log['created_at'] = log['created_at'].isoformat()
-            
-            # Create response schema
             try:
                 cache_log = CacheLogResponseSchema(**dict(log))
                 cache_logs.append(cache_log.dict())
@@ -3535,27 +3522,9 @@ def create_cache_log():
                 if result and len(result) > 0:
                     log_dict = dict(result[0])
                     
-                    if log_dict.get('metadata'):
-                        try:
-                            if isinstance(log_dict['metadata'], str):
-                                log_dict['metadata'] = json.loads(log_dict['metadata'])
-                        except:
-                            log_dict['metadata'] = None
-                    
+                    # Schema validators handle MySQL type conversions automatically (metadata JSON, enums)
                     if 'created_at' not in log_dict or log_dict['created_at'] is None:
                         log_dict['created_at'] = datetime.now()
-                    
-                    # Convert enum values to strings
-                    if 'operation' in log_dict and isinstance(log_dict['operation'], str):
-                        try:
-                            log_dict['operation'] = CacheOperation(log_dict['operation'].lower()).value
-                        except:
-                            pass
-                    if 'status' in log_dict and isinstance(log_dict['status'], str):
-                        try:
-                            log_dict['status'] = CacheStatus(log_dict['status'].lower()).value
-                        except:
-                            pass
                     
                     response = CacheLogResponseSchema(**log_dict)
                     return jsonify(response.dict())
@@ -3955,19 +3924,11 @@ def get_blogs():
         
         blogs = execute_query(query, tuple(params))
         
+        # Schema validators handle MySQL type conversions automatically (tags JSON, bools)
         blog_list = []
         for blog in blogs:
             blog_dict = dict(blog)
-            if blog_dict.get('tags'):
-                try:
-                    if isinstance(blog_dict['tags'], str):
-                        blog_dict['tags'] = json.loads(blog_dict['tags'])
-                    elif not isinstance(blog_dict['tags'], list):
-                        blog_dict['tags'] = []
-                except:
-                    blog_dict['tags'] = []
-            else:
-                blog_dict['tags'] = []
+            # Only normalize image URL, schema handles tags JSON parsing and bool conversions
             if 'image_url' in blog_dict and blog_dict['image_url']:
                 blog_dict['image_url'] = normalize_image_url(blog_dict['image_url'])
             blog_list.append(blog_dict)
@@ -3997,17 +3958,8 @@ def get_blog(blog_id: int):
         
         blog_data = dict(blogs[0])
         
-        if blog_data.get('tags'):
-            try:
-                if isinstance(blog_data['tags'], str):
-                    blog_data['tags'] = json.loads(blog_data['tags'])
-                elif not isinstance(blog_data['tags'], list):
-                    blog_data['tags'] = []
-            except:
-                blog_data['tags'] = []
-        else:
-            blog_data['tags'] = []
-        
+        # Schema validators handle MySQL type conversions automatically (tags JSON, bools)
+        # Only normalize image URL, schema handles tags JSON parsing and bool conversions
         if 'image_url' in blog_data and blog_data['image_url']:
             blog_data['image_url'] = normalize_image_url(blog_data['image_url'])
         

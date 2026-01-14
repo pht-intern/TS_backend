@@ -232,6 +232,44 @@ class PropertyResponseSchema(BaseModel):
     price_negotiable: Optional[bool] = None
     price_includes_registration: Optional[bool] = None
 
+    @field_validator('is_featured', 'is_active', 'price_negotiable', 'price_includes_registration', mode='before')
+    @classmethod
+    def parse_bool(cls, v):
+        """Convert MySQL TINYINT(1) (0/1) to bool"""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, int):
+            return bool(v)
+        if isinstance(v, str):
+            return v.lower() in ('true', '1', 'yes', 'on')
+        return False if v is None else bool(v)
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def parse_status(cls, v):
+        """Convert status string to PropertyStatus enum"""
+        if isinstance(v, PropertyStatus):
+            return v
+        if isinstance(v, str):
+            try:
+                return PropertyStatus(v.lower())
+            except ValueError:
+                return PropertyStatus.SALE  # Default
+        return PropertyStatus.SALE
+
+    @field_validator('type', mode='before')
+    @classmethod
+    def parse_type(cls, v):
+        """Convert type string to PropertyType enum"""
+        if isinstance(v, PropertyType):
+            return v
+        if isinstance(v, str):
+            try:
+                return PropertyType(v.lower())
+            except ValueError:
+                return PropertyType.HOUSE  # Default
+        return PropertyType.HOUSE
+
     @field_serializer('created_at', 'updated_at')
     def serialize_datetime(self, value: datetime, _info):
         return value.isoformat() if value else None
@@ -267,6 +305,44 @@ class PropertyListResponseSchema(BaseModel):
     total_floors: Optional[str] = None
     total_acres: Optional[str] = None
     property_status: Optional[str] = None  # Alternative status field
+
+    @field_validator('is_featured', mode='before')
+    @classmethod
+    def parse_bool(cls, v):
+        """Convert MySQL TINYINT(1) (0/1) to bool"""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, int):
+            return bool(v)
+        if isinstance(v, str):
+            return v.lower() in ('true', '1', 'yes', 'on')
+        return False if v is None else bool(v)
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def parse_status(cls, v):
+        """Convert status string to PropertyStatus enum"""
+        if isinstance(v, PropertyStatus):
+            return v
+        if isinstance(v, str):
+            try:
+                return PropertyStatus(v.lower())
+            except ValueError:
+                return PropertyStatus.SALE  # Default
+        return PropertyStatus.SALE
+
+    @field_validator('type', mode='before')
+    @classmethod
+    def parse_type(cls, v):
+        """Convert type string to PropertyType enum"""
+        if isinstance(v, PropertyType):
+            return v
+        if isinstance(v, str):
+            try:
+                return PropertyType(v.lower())
+            except ValueError:
+                return PropertyType.HOUSE  # Default
+        return PropertyType.HOUSE
 
     @field_serializer('created_at')
     def serialize_datetime(self, value: datetime, _info):
@@ -325,6 +401,18 @@ class PartnerResponseSchema(BaseModel):
     display_order: int
     created_at: datetime
     updated_at: datetime
+
+    @field_validator('is_active', mode='before')
+    @classmethod
+    def parse_bool(cls, v):
+        """Convert MySQL TINYINT(1) (0/1) to bool"""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, int):
+            return bool(v)
+        if isinstance(v, str):
+            return v.lower() in ('true', '1', 'yes', 'on')
+        return False if v is None else bool(v)
 
     @field_serializer('created_at', 'updated_at')
     def serialize_datetime(self, value: datetime, _info):
@@ -696,6 +784,34 @@ class BlogResponseSchema(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @field_validator('tags', mode='before')
+    @classmethod
+    def parse_tags(cls, v):
+        """Parse JSON tags from MySQL string or list"""
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v) if v else []
+                return parsed if isinstance(parsed, list) else []
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return []
+
+    @field_validator('is_featured', 'is_active', mode='before')
+    @classmethod
+    def parse_bool(cls, v):
+        """Convert MySQL TINYINT(1) (0/1) to bool"""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, int):
+            return bool(v)
+        if isinstance(v, str):
+            return v.lower() in ('true', '1', 'yes', 'on')
+        return False if v is None else bool(v)
+
     @field_serializer('created_at', 'updated_at')
     def serialize_datetime(self, value: datetime, _info):
         return value.isoformat() if value else None
@@ -823,6 +939,47 @@ class CacheLogResponseSchema(BaseModel):
     user_agent: Optional[str] = None
     metadata: Optional[dict] = None
     created_at: datetime
+
+    @field_validator('metadata', mode='before')
+    @classmethod
+    def parse_metadata(cls, v):
+        """Parse JSON metadata from MySQL string or dict"""
+        if v is None:
+            return None
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, str):
+            try:
+                return json.loads(v) if v else None
+            except (json.JSONDecodeError, TypeError):
+                return None
+        return None
+
+    @field_validator('operation', mode='before')
+    @classmethod
+    def parse_operation(cls, v):
+        """Convert operation string to CacheOperation enum"""
+        if isinstance(v, CacheOperation):
+            return v
+        if isinstance(v, str):
+            try:
+                return CacheOperation(v.lower())
+            except ValueError:
+                return CacheOperation.HIT  # Default
+        return CacheOperation.HIT
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def parse_status(cls, v):
+        """Convert status string to CacheStatus enum"""
+        if isinstance(v, CacheStatus):
+            return v
+        if isinstance(v, str):
+            try:
+                return CacheStatus(v.lower())
+            except ValueError:
+                return CacheStatus.SUCCESS  # Default
+        return CacheStatus.SUCCESS
 
     @field_serializer('created_at')
     def serialize_datetime(self, value: datetime, _info):
