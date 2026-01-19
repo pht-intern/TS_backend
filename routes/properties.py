@@ -769,17 +769,17 @@ def register_properties_routes(app):
                 result = execute_update("DELETE FROM residential_properties WHERE id = %s", (property_id,))
                 if result == 0:
                     current_app.logger.warning(f"Delete failed: Property {property_id} not found in residential_properties")
-                    return jsonify({"error": "Property not found", "success": False, "code": 404}), 404
+                    return abort_with_message(404, "Property not found")
                 current_app.logger.info(f"Property {property_id} deleted successfully from residential_properties")
             else:
                 plot_check = execute_query("SELECT id FROM plot_properties WHERE id = %s", (property_id,))
                 if not plot_check:
                     current_app.logger.warning(f"Delete failed: Property {property_id} not found in plot_properties")
-                    return jsonify({"error": "Property not found", "success": False, "code": 404}), 404
+                    return abort_with_message(404, "Property not found")
                 result = execute_update("DELETE FROM plot_properties WHERE id = %s", (property_id,))
                 if result == 0:
                     current_app.logger.warning(f"Delete failed: Property {property_id} not found in plot_properties")
-                    return jsonify({"error": "Property not found", "success": False, "code": 404}), 404
+                    return abort_with_message(404, "Property not found")
                 current_app.logger.info(f"Property {property_id} deleted successfully from plot_properties")
             
             # Success - return 200 with success message
@@ -789,7 +789,7 @@ def register_properties_routes(app):
             current_app.logger.error(error_msg, exc_info=True)
             print(error_msg)
             traceback.print_exc()
-            return jsonify({"error": f"Error deleting property: {str(e)}", "success": False, "code": 500}), 500
+            return abort_with_message(500, f"Failed to delete property: {str(e)}")
     
     @app.route("/api/residential-properties", methods=["POST"])
     @require_admin_auth

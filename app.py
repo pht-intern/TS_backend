@@ -4,7 +4,7 @@ Streamlined main API server - routes are organized in separate modules
 """
 import time
 
-from flask import Flask, request, url_for, jsonify, send_file, abort, make_response
+from flask import Flask, request, url_for, jsonify, send_file, make_response
 from flask_cors import CORS
 import os
 from pathlib import Path
@@ -284,7 +284,6 @@ try:
                 'request': request,
                 'jsonify': jsonify,
                 'send_file': send_file,
-                'abort': abort,
                 'make_response': make_response,
                 'url_for': url_for,
                 'CORS': CORS,
