@@ -530,6 +530,9 @@ def register_properties_routes(app):
                     img_dict = dict(img)
                     if img_dict.get('image_url'):
                         img_dict['image_url'] = normalize_image_url(img_dict['image_url'])
+                    # Convert datetime to ISO format string
+                    if 'created_at' in img_dict and isinstance(img_dict['created_at'], datetime):
+                        img_dict['created_at'] = img_dict['created_at'].isoformat()
                     img_dict['is_primary'] = (i == 0)
                     img_dict['image_order'] = img_dict.get('image_order') if img_dict.get('image_order') is not None else i
                     normalized_images.append(img_dict)
@@ -599,7 +602,19 @@ def register_properties_routes(app):
                 if isinstance(obj, list):
                     return [_decimal_to_float(v) for v in obj]
                 return obj
+            
+            # Convert datetime objects to ISO format strings for JSON serialization
+            def _datetime_to_iso(obj):
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                if isinstance(obj, dict):
+                    return {k: _datetime_to_iso(v) for k, v in obj.items()}
+                if isinstance(obj, list):
+                    return [_datetime_to_iso(v) for v in obj]
+                return obj
+            
             property_data = _decimal_to_float(property_data)
+            property_data = _datetime_to_iso(property_data)
             
             return jsonify(property_data)
         except Exception as e:
