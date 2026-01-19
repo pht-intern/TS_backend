@@ -9,7 +9,7 @@ from database import execute_query, execute_update, execute_insert
 from models import PropertyType, PropertyStatus
 from schemas import PaginatedResponse
 from utils.helpers import (
-    get_pagination_params, calculate_pages, normalize_image_url, abort_with_message,
+    get_pagination_params, calculate_pages, normalize_image_url, error_response, success_response,
     process_image_urls, require_admin_auth, safe_int, safe_float
 )
 from config import IMAGES_DIR
@@ -247,14 +247,14 @@ def register_properties_routes(app):
             error_msg = str(e)
             print(f"Error fetching properties: {error_msg}")
             traceback.print_exc()
-            abort_with_message(500, f"Error fetching properties: {error_msg}")
+            return error_response(f"Error fetching properties: {error_msg}", 500)
     
     def create_property():
         """Create a new property (residential or plot) based on property_type"""
         try:
             data = request.get_json()
             if not data:
-                abort_with_message(400, "Invalid request data")
+                return error_response("Invalid request data", 400)
             
             property_type = data.get("property_type")
             if not property_type:
@@ -287,7 +287,7 @@ def register_properties_routes(app):
                 project_name = data.get("property_name") or data.get("project_name")
                 
                 if not city or not locality or not project_name:
-                    abort_with_message(400, "City, locality, and project name are required")
+                    return error_response("City, locality, and project name are required", 400)
                 
                 plot_area = safe_float(data.get("plot_area"), 0.0)
                 plot_length = safe_float(data.get("plot_length") or data.get("length"), 0.0)
@@ -295,7 +295,7 @@ def register_properties_routes(app):
                 price = safe_float(data.get("price"), 0.0)
                 
                 if price <= 0:
-                    abort_with_message(400, "Price is required and must be greater than 0")
+                    return error_response("Price is required and must be greater than 0", 400)
                 
                 insert_query = """
                     INSERT INTO plot_properties (
@@ -328,7 +328,7 @@ def register_properties_routes(app):
                 property_name = data.get("property_name")
                 
                 if not city or not locality or not property_name:
-                    abort_with_message(400, "City, locality, and property name are required")
+                    return error_response("City, locality, and property name are required", 400)
                 
                 unit_type = data.get("unit_type", "bhk")
                 bedrooms = safe_int(data.get("bedrooms"), 1)
@@ -339,7 +339,7 @@ def register_properties_routes(app):
                 price = safe_float(data.get("price"), 0.0)
                 
                 if price <= 0:
-                    abort_with_message(400, "Price is required and must be greater than 0")
+                    return error_response("Price is required and must be greater than 0", 400)
                 
                 # Map property_type to DB type
                 db_property_type = _type_map.get(property_type, "apartment")
@@ -438,13 +438,13 @@ def register_properties_routes(app):
             print(f"Error creating property: {error_msg}")
             print(f"Received data: {request.get_json()}")
             traceback.print_exc()
-            abort_with_message(400, error_msg)
+            return error_response(error_msg, 400)
         except Exception as e:
             error_msg = f"Error creating property: {str(e)}"
             print(error_msg)
             print(f"Received data: {request.get_json()}")
             traceback.print_exc()
-            abort_with_message(500, error_msg)
+            return error_response(error_msg, 500)
     
     @app.route("/api/properties/<int:property_id>", methods=["GET"])
     def get_property(property_id: int):
@@ -492,7 +492,7 @@ def register_properties_routes(app):
                 property_category = 'plot'
             
             if not properties:
-                abort_with_message(404, "Property not found")
+                return error_response("Property not found", 404)
             
             property_data = dict(properties[0])
             
@@ -620,7 +620,7 @@ def register_properties_routes(app):
         except Exception as e:
             print(f"Error fetching property: {str(e)}")
             traceback.print_exc()
-            abort_with_message(500, f"Error fetching property: {str(e)}")
+            return error_response(f"Error fetching property: {str(e)}", 500)
     
     @app.route("/api/properties/<int:property_id>", methods=["POST"])
     @require_admin_auth
@@ -637,7 +637,7 @@ def register_properties_routes(app):
             else:
                 res = execute_query("SELECT id FROM plot_properties WHERE id = %s", (property_id,))
                 if not res:
-                    abort_with_message(404, "Property not found")
+                    return error_response("Property not found", 404)
                 table, cat = "plot_properties", "plot"
                 feature_table = "property_features"
                 feature_category = "plot"
@@ -645,7 +645,7 @@ def register_properties_routes(app):
             
             data = request.get_json()
             if not data:
-                abort_with_message(400, "Invalid request data")
+                return error_response("Invalid request data", 400)
             
             # Map frontend type to DB enum: individual_house->house, apartments->apartment, villas->villa (avoids chk on type)
             _type_map = {"individual_house": "house", "apartments": "apartment", "villas": "villa"}
@@ -750,13 +750,13 @@ def register_properties_routes(app):
             print(f"Error updating property: {error_msg}")
             print(f"Received data: {request.get_json()}")
             traceback.print_exc()
-            abort_with_message(400, error_msg)
+            return error_response(error_msg, 400)
         except Exception as e:
             error_msg = f"Error updating property: {str(e)}"
             print(error_msg)
             print(f"Received data: {request.get_json()}")
             traceback.print_exc()
-            abort_with_message(500, error_msg)
+            return error_response(error_msg, 500)
     
     @app.route("/api/properties/<int:property_id>", methods=["DELETE"])
     @require_admin_auth
@@ -769,36 +769,36 @@ def register_properties_routes(app):
                 result = execute_update("DELETE FROM residential_properties WHERE id = %s", (property_id,))
                 if result == 0:
                     current_app.logger.warning(f"Delete failed: Property {property_id} not found in residential_properties")
-                    return abort_with_message(404, "Property not found")
+                    return error_response("Property not found", 404)
                 current_app.logger.info(f"Property {property_id} deleted successfully from residential_properties")
             else:
                 plot_check = execute_query("SELECT id FROM plot_properties WHERE id = %s", (property_id,))
                 if not plot_check:
                     current_app.logger.warning(f"Delete failed: Property {property_id} not found in plot_properties")
-                    return abort_with_message(404, "Property not found")
+                    return error_response("Property not found", 404)
                 result = execute_update("DELETE FROM plot_properties WHERE id = %s", (property_id,))
                 if result == 0:
                     current_app.logger.warning(f"Delete failed: Property {property_id} not found in plot_properties")
-                    return abort_with_message(404, "Property not found")
+                    return error_response("Property not found", 404)
                 current_app.logger.info(f"Property {property_id} deleted successfully from plot_properties")
             
             # Success - return 200 with success message
-            return jsonify({"message": "Property deleted successfully", "success": True}), 200
+            return success_response("Property deleted successfully")
         except Exception as e:
             error_msg = f"Error deleting property {property_id}: {str(e)}"
             current_app.logger.error(error_msg, exc_info=True)
             print(error_msg)
             traceback.print_exc()
-            return abort_with_message(500, f"Failed to delete property: {str(e)}")
+            return error_response(f"Failed to delete property: {str(e)}", 500)
     
     @app.route("/api/residential-properties", methods=["POST"])
     @require_admin_auth
     def create_residential_property():
         """Create property functionality has been removed"""
-        abort_with_message(403, "Property creation functionality has been disabled")
+        return error_response("Property creation functionality has been disabled", 403)
     
     @app.route("/api/plot-properties", methods=["POST"])
     @require_admin_auth
     def create_plot_property():
         """Create property functionality has been removed"""
-        abort_with_message(403, "Property creation functionality has been disabled")
+        return error_response("Property creation functionality has been disabled", 403)

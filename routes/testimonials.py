@@ -8,7 +8,7 @@ import re
 import traceback
 from database import execute_query, execute_update, execute_insert
 from schemas import TestimonialPublicSchema, TestimonialResponseSchema, TestimonialUpdateSchema, TestimonialCreateSchema
-from utils.helpers import abort_with_message, require_admin_auth
+from utils.helpers import error_response, success_response, require_admin_auth
 
 
 def register_testimonials_routes(app):
@@ -101,7 +101,7 @@ def register_testimonials_routes(app):
                     response = make_response(f"{callback}([]);")
                     response.headers['Content-Type'] = 'application/javascript'
                     return response
-            abort_with_message(500, f"Error fetching testimonials: {error_msg}")
+            return error_response(f"Error fetching testimonials: {error_msg}", 500)
     
     @app.route("/api/testimonials", methods=["POST"])
     @require_admin_auth
@@ -110,7 +110,7 @@ def register_testimonials_routes(app):
         try:
             data = request.get_json()
             if not data:
-                abort_with_message(400, "Invalid request data")
+                return error_response("Invalid request data", 400)
             
             testimonial_data = TestimonialCreateSchema(**data)
             
@@ -148,7 +148,7 @@ def register_testimonials_routes(app):
         except Exception as e:
             print(f"Error creating testimonial: {str(e)}")
             traceback.print_exc()
-            abort_with_message(500, f"Error creating testimonial: {str(e)}")
+            return error_response(f"Error creating testimonial: {str(e)}", 500)
     
     @app.route("/api/admin/testimonials", methods=["GET"])
     @require_admin_auth
@@ -161,7 +161,7 @@ def register_testimonials_routes(app):
         except Exception as e:
             print(f"Error fetching testimonials: {str(e)}")
             traceback.print_exc()
-            abort_with_message(500, f"Error fetching testimonials: {str(e)}")
+            return error_response(f"Error fetching testimonials: {str(e)}", 500)
     
     @app.route("/api/testimonials/<int:testimonial_id>", methods=["POST"])
     @require_admin_auth
@@ -170,11 +170,11 @@ def register_testimonials_routes(app):
         try:
             existing = execute_query("SELECT id FROM testimonials WHERE id = %s", (testimonial_id,))
             if not existing:
-                abort_with_message(404, "Testimonial not found")
+                return error_response("Testimonial not found", 404)
             
             data = request.get_json()
             if not data:
-                abort_with_message(400, "Invalid request data")
+                return error_response("Invalid request data", 400)
             
             testimonial_data = TestimonialUpdateSchema(**data)
             
@@ -217,7 +217,7 @@ def register_testimonials_routes(app):
         except Exception as e:
             print(f"Error updating testimonial: {str(e)}")
             traceback.print_exc()
-            abort_with_message(500, f"Error updating testimonial: {str(e)}")
+            return error_response(f"Error updating testimonial: {str(e)}", 500)
     
     @app.route("/api/testimonials/<int:testimonial_id>", methods=["DELETE"])
     @require_admin_auth
@@ -226,9 +226,9 @@ def register_testimonials_routes(app):
         try:
             result = execute_update("DELETE FROM testimonials WHERE id = %s", (testimonial_id,))
             if result == 0:
-                abort_with_message(404, "Testimonial not found")
+                return error_response("Testimonial not found", 404)
             return jsonify({"message": "Testimonial deleted successfully"})
         except Exception as e:
             print(f"Error deleting testimonial: {str(e)}")
             traceback.print_exc()
-            abort_with_message(500, f"Error deleting testimonial: {str(e)}")
+            return error_response(f"Error deleting testimonial: {str(e)}", 500)

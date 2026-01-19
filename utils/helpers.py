@@ -139,20 +139,66 @@ def safe_json(value, default=None):
 
 
 # ==========================================================
-# FINAL JSON ERROR RESPONSE (NO abort())
+# FINAL JSON RESPONSE HELPERS (NO abort())
+# ==========================================================
+def error_response(message, status_code=400, extra=None):
+    """
+    Standard JSON error response for APIs.
+    Returns a proper JSON response that the frontend can handle.
+    This is a pure response helper - no exceptions, no crashes.
+    
+    Usage:
+        return error_response("Property not found", 404)
+        return error_response("Invalid input", 400, {"field": "email"})
+    """
+    payload = {
+        "success": False,
+        "error": message,
+        "code": status_code
+    }
+
+    if extra:
+        payload.update(extra)
+
+    return jsonify(payload), status_code
+
+
+def success_response(message=None, data=None, status_code=200):
+    """
+    Standard JSON success response for APIs.
+    
+    Usage:
+        return success_response("Property deleted successfully")
+        return success_response("Property updated", {"id": 123})
+        return success_response(data={"properties": [...]})
+    """
+    payload = {
+        "success": True
+    }
+
+    if message:
+        payload["message"] = message
+
+    if data is not None:
+        payload["data"] = data
+
+    return jsonify(payload), status_code
+
+
+# ==========================================================
+# BACKWARD COMPATIBILITY: abort_with_message
 # ==========================================================
 def abort_with_message(code: int, message: str):
     """
+    DEPRECATED: Use error_response() instead.
+    Kept for backward compatibility during migration.
+    
     IMPORTANT:
     This MUST be returned by the caller.
     Example:
         return abort_with_message(404, "Not found")
     """
-    return jsonify({
-        "success": False,
-        "error": message,
-        "code": code
-    }), code
+    return error_response(message, code)
 
 
 # ==========================================================
@@ -165,7 +211,7 @@ def require_admin_auth(f):
     def decorated_function(*args, **kwargs):
         allowed_admin_email = os.getenv("ADMIN_EMAIL")
         if not allowed_admin_email:
-            return abort_with_message(500, "Server configuration error")
+            return error_response("Server configuration error", 500)
 
         auth_email = request.headers.get("X-Admin-Email") or request.headers.get("Authorization")
 
@@ -173,17 +219,17 @@ def require_admin_auth(f):
             auth_email = auth_email.replace("Email ", "")
 
         if not auth_email:
-            return abort_with_message(401, "Unauthorized")
+            return error_response("Unauthorized", 401)
 
         auth_email = auth_email.lower().strip()
         allowed_admin_email = allowed_admin_email.lower().strip()
 
         if auth_email != allowed_admin_email:
-            return abort_with_message(401, "Unauthorized")
+            return error_response("Unauthorized", 401)
 
         try:
             if not test_connection().get("connected"):
-                return abort_with_message(500, "Database unavailable")
+                return error_response("Database unavailable", 500)
 
             user_query = """
                 SELECT id
@@ -195,11 +241,11 @@ def require_admin_auth(f):
             """
             users = execute_query(user_query, (auth_email,))
             if not users:
-                return abort_with_message(401, "Unauthorized")
+                return error_response("Unauthorized", 401)
 
         except Exception:
             traceback.print_exc()
-            return abort_with_message(401, "Unauthorized")
+            return error_response("Unauthorized", 401)
 
         return f(*args, **kwargs)
 
