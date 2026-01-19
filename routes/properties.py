@@ -1,7 +1,7 @@
 """
 Properties routes
 """
-from flask import request, jsonify
+from flask import request, jsonify, current_app
 from datetime import datetime
 from decimal import Decimal
 import traceback
@@ -761,23 +761,35 @@ def register_properties_routes(app):
     @app.route("/api/properties/<int:property_id>", methods=["DELETE"])
     @require_admin_auth
     def delete_property(property_id: int):
-        """Delete a property (residential or plot)."""
+        """Delete a property (residential or plot) - Production-safe implementation"""
         try:
+            # Check which table contains this property
             residential_check = execute_query("SELECT id FROM residential_properties WHERE id = %s", (property_id,))
             if residential_check:
                 result = execute_update("DELETE FROM residential_properties WHERE id = %s", (property_id,))
+                if result == 0:
+                    current_app.logger.warning(f"Delete failed: Property {property_id} not found in residential_properties")
+                    return jsonify({"error": "Property not found", "success": False, "code": 404}), 404
+                current_app.logger.info(f"Property {property_id} deleted successfully from residential_properties")
             else:
                 plot_check = execute_query("SELECT id FROM plot_properties WHERE id = %s", (property_id,))
                 if not plot_check:
-                    abort_with_message(404, "Property not found")
+                    current_app.logger.warning(f"Delete failed: Property {property_id} not found in plot_properties")
+                    return jsonify({"error": "Property not found", "success": False, "code": 404}), 404
                 result = execute_update("DELETE FROM plot_properties WHERE id = %s", (property_id,))
-            if result == 0:
-                abort_with_message(404, "Property not found")
-            return jsonify({"message": "Property deleted successfully"})
+                if result == 0:
+                    current_app.logger.warning(f"Delete failed: Property {property_id} not found in plot_properties")
+                    return jsonify({"error": "Property not found", "success": False, "code": 404}), 404
+                current_app.logger.info(f"Property {property_id} deleted successfully from plot_properties")
+            
+            # Success - return 200 with success message
+            return jsonify({"message": "Property deleted successfully", "success": True}), 200
         except Exception as e:
-            print(f"Error deleting property: {str(e)}")
+            error_msg = f"Error deleting property {property_id}: {str(e)}"
+            current_app.logger.error(error_msg, exc_info=True)
+            print(error_msg)
             traceback.print_exc()
-            abort_with_message(500, f"Error deleting property: {str(e)}")
+            return jsonify({"error": f"Error deleting property: {str(e)}", "success": False, "code": 500}), 500
     
     @app.route("/api/residential-properties", methods=["POST"])
     @require_admin_auth

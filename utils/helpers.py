@@ -179,8 +179,15 @@ def normalize_image_url(url: Optional[str]) -> Optional[str]:
 
 
 def abort_with_message(status_code: int, message: str):
-    """Helper function to abort with a custom error message"""
-    response = make_response(jsonify({"error": message, "success": False}), status_code)
+    """
+    Helper function to abort with a custom error message.
+    Returns a proper JSON response that the frontend can handle.
+    """
+    response = make_response(jsonify({
+        "error": message,
+        "success": False,
+        "code": status_code
+    }), status_code)
     abort(response)
 
 

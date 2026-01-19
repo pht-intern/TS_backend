@@ -177,6 +177,50 @@ def track_request_metrics(response):
     
     return response
 
+# Global error handlers to ensure all errors return JSON responses
+# These handlers catch unhandled exceptions and ensure JSON responses
+@app.errorhandler(404)
+def not_found_error(error):
+    """Handle 404 errors with JSON response"""
+    # Check if error is already a response (from abort_with_message)
+    if hasattr(error, 'response') and error.response:
+        return error.response
+    return jsonify({"error": "Resource not found", "success": False, "code": 404}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    """Handle 500 errors with JSON response"""
+    import traceback
+    # Check if error is already a response (from abort_with_message)
+    if hasattr(error, 'response') and error.response:
+        return error.response
+    
+    error_msg = str(error) if error else "Internal server error"
+    print(f"Internal server error: {error_msg}")
+    traceback.print_exc()
+    return jsonify({"error": "Internal server error", "success": False, "code": 500}), 500
+
+@app.errorhandler(Exception)
+def handle_exception(error):
+    """Handle all unhandled exceptions with JSON response"""
+    import traceback
+    # Check if error is already a response (from abort_with_message)
+    if hasattr(error, 'response') and error.response:
+        return error.response
+    
+    error_msg = str(error) if error else "An unexpected error occurred"
+    print(f"Unhandled exception: {error_msg}")
+    traceback.print_exc()
+    
+    # Determine status code based on error type
+    status_code = 500
+    if hasattr(error, 'code'):
+        status_code = error.code
+    elif hasattr(error, 'status_code'):
+        status_code = error.status_code
+    
+    return jsonify({"error": error_msg, "success": False, "code": status_code}), status_code
+
 # Import all routes
 # Routes are organized in separate modules to keep app.py manageable
 # Import route modules - they will register routes on the app instance
