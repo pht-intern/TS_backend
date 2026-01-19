@@ -3,7 +3,6 @@ Flask Application for Tirumakudalu Properties
 Streamlined main API server - routes are organized in separate modules
 """
 import time
-print("APP BOOT TIME:", time.time())
 
 from flask import Flask, request, url_for, jsonify, send_file, abort, make_response
 from flask_cors import CORS
