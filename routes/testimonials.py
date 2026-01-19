@@ -2,6 +2,7 @@
 Testimonials routes
 """
 from flask import request, jsonify, make_response
+from datetime import datetime
 import json
 import re
 import traceback
@@ -60,6 +61,21 @@ def register_testimonials_routes(app):
                     continue
             
             data = [r.dict() for r in result]
+            
+            # Convert datetime objects to ISO format strings for JSON serialization
+            # This is critical for JSONP responses that use json.dumps() directly
+            def convert_datetime_to_iso(obj):
+                """Recursively convert datetime objects to ISO format strings"""
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                if isinstance(obj, dict):
+                    return {k: convert_datetime_to_iso(v) for k, v in obj.items()}
+                if isinstance(obj, list):
+                    return [convert_datetime_to_iso(v) for v in obj]
+                return obj
+            
+            # Convert datetime fields in data before JSON serialization
+            data = convert_datetime_to_iso(data)
             
             # Support JSONP if callback parameter is provided
             callback = request.args.get('callback')
