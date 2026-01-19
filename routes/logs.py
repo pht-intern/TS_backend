@@ -5,9 +5,9 @@ from flask import request, jsonify
 from datetime import datetime
 import json
 import traceback
-from database import get_db_cursor
-from schemas import LogCreateSchema
-from utils.helpers import get_client_ip
+from database import get_db_cursor, execute_query
+from schemas import LogCreateSchema, LogResponseSchema
+from utils.helpers import get_client_ip, abort_with_message, require_admin_auth
 
 
 def register_logs_routes(app):
@@ -85,3 +85,50 @@ def register_logs_routes(app):
                 "success": True,
                 "message": "Log entry accepted"
             })
+    
+    @app.route("/api/admin/logs", methods=["GET"])
+    @require_admin_auth
+    def get_all_logs():
+        """Get all logs (admin endpoint)"""
+        try:
+            log_type = request.args.get('log_type')
+            action = request.args.get('action')
+            limit = request.args.get('limit', default=100, type=int)
+            if limit < 1:
+                limit = 100
+            if limit > 1000:
+                limit = 1000
+            
+            conditions = []
+            params = []
+            
+            if log_type:
+                conditions.append("log_type = %s")
+                params.append(log_type)
+            
+            if action:
+                conditions.append("action = %s")
+                params.append(action)
+            
+            where_clause = " AND ".join(conditions) if conditions else "1=1"
+            params.append(limit)
+            
+            query = f"SELECT * FROM logs WHERE {where_clause} ORDER BY created_at DESC LIMIT %s"
+            
+            logs = execute_query(query, tuple(params))
+            
+            # Parse JSON metadata
+            for log in logs:
+                if log.get('metadata'):
+                    try:
+                        if isinstance(log['metadata'], str):
+                            log['metadata'] = json.loads(log['metadata'])
+                    except:
+                        log['metadata'] = None
+            
+            result = [LogResponseSchema(**dict(log)) for log in logs]
+            return jsonify([r.dict() for r in result])
+        except Exception as e:
+            print(f"Error fetching logs: {str(e)}")
+            traceback.print_exc()
+            abort_with_message(500, f"Error fetching logs: {str(e)}")

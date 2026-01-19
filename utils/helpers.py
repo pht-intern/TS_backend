@@ -184,6 +184,49 @@ def abort_with_message(status_code: int, message: str):
     abort(response)
 
 
+def safe_int(value, default=0):
+    """Safely convert a value to int, handling None, empty strings, and invalid values"""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        value = value.strip()
+        if value == '' or value.lower() == 'nan' or value.lower() == 'none':
+            return default
+    try:
+        return int(float(value))  # Convert to float first to handle string numbers
+    except (ValueError, TypeError):
+        return default
+
+
+def safe_float(value, default=0.0):
+    """Safely convert a value to float, handling None, empty strings, and invalid values"""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        value = value.strip()
+        if value == '' or value.lower() == 'nan' or value.lower() == 'none':
+            return default
+        # Try to extract numeric value from strings like "Rs. 10", "10 Cr", etc.
+        # Remove common currency symbols and text
+        import re
+        # Remove currency symbols and common text
+        cleaned = re.sub(r'[Rs\.₹,\s]', '', value, flags=re.IGNORECASE)
+        # Try to extract just the number part
+        number_match = re.search(r'[\d.]+', cleaned)
+        if number_match:
+            value = number_match.group(0)
+    try:
+        result = float(value)
+        # Check for NaN or infinity
+        if not (result == result):  # NaN check
+            return default
+        if result == float('inf') or result == float('-inf'):
+            return default
+        return result
+    except (ValueError, TypeError):
+        return default
+
+
 def require_admin_auth(f):
     """
     Decorator to require admin authentication for protected routes.

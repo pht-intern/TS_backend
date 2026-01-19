@@ -5,9 +5,9 @@ from flask import request, jsonify, make_response
 import json
 import re
 import traceback
-from database import execute_query
-from schemas import TestimonialPublicSchema
-from utils.helpers import abort_with_message
+from database import execute_query, execute_update
+from schemas import TestimonialPublicSchema, TestimonialResponseSchema, TestimonialUpdateSchema
+from utils.helpers import abort_with_message, require_admin_auth
 
 
 def register_testimonials_routes(app):
@@ -86,3 +86,86 @@ def register_testimonials_routes(app):
                     response.headers['Content-Type'] = 'application/javascript'
                     return response
             abort_with_message(500, f"Error fetching testimonials: {error_msg}")
+    
+    @app.route("/api/admin/testimonials", methods=["GET"])
+    @require_admin_auth
+    def get_all_testimonials():
+        """Get all testimonials (admin endpoint - includes unapproved)"""
+        try:
+            testimonials = execute_query("SELECT * FROM testimonials ORDER BY created_at DESC")
+            result = [TestimonialResponseSchema(**dict(t)) for t in testimonials]
+            return jsonify([r.dict() for r in result])
+        except Exception as e:
+            print(f"Error fetching testimonials: {str(e)}")
+            traceback.print_exc()
+            abort_with_message(500, f"Error fetching testimonials: {str(e)}")
+    
+    @app.route("/api/testimonials/<int:testimonial_id>", methods=["POST"])
+    @require_admin_auth
+    def update_testimonial(testimonial_id: int):
+        """Update a testimonial"""
+        try:
+            existing = execute_query("SELECT id FROM testimonials WHERE id = %s", (testimonial_id,))
+            if not existing:
+                abort_with_message(404, "Testimonial not found")
+            
+            data = request.get_json()
+            if not data:
+                abort_with_message(400, "Invalid request data")
+            
+            testimonial_data = TestimonialUpdateSchema(**data)
+            
+            updates = []
+            params = []
+            
+            if testimonial_data.client_name is not None:
+                updates.append("client_name = %s")
+                params.append(testimonial_data.client_name)
+            if testimonial_data.client_email is not None:
+                updates.append("client_email = %s")
+                params.append(testimonial_data.client_email)
+            if testimonial_data.client_phone is not None:
+                updates.append("client_phone = %s")
+                params.append(testimonial_data.client_phone)
+            if testimonial_data.service_type is not None:
+                updates.append("service_type = %s")
+                params.append(testimonial_data.service_type)
+            if testimonial_data.rating is not None:
+                updates.append("rating = %s")
+                params.append(testimonial_data.rating)
+            if testimonial_data.message is not None:
+                updates.append("message = %s")
+                params.append(testimonial_data.message)
+            if testimonial_data.is_approved is not None:
+                updates.append("is_approved = %s")
+                params.append(1 if testimonial_data.is_approved else 0)
+            if testimonial_data.is_featured is not None:
+                updates.append("is_featured = %s")
+                params.append(1 if testimonial_data.is_featured else 0)
+            
+            if updates:
+                params.append(testimonial_id)
+                update_query = f"UPDATE testimonials SET {', '.join(updates)} WHERE id = %s"
+                execute_update(update_query, tuple(params))
+            
+            result = execute_query("SELECT * FROM testimonials WHERE id = %s", (testimonial_id,))
+            response = TestimonialResponseSchema(**dict(result[0]))
+            return jsonify(response.dict())
+        except Exception as e:
+            print(f"Error updating testimonial: {str(e)}")
+            traceback.print_exc()
+            abort_with_message(500, f"Error updating testimonial: {str(e)}")
+    
+    @app.route("/api/testimonials/<int:testimonial_id>", methods=["DELETE"])
+    @require_admin_auth
+    def delete_testimonial(testimonial_id: int):
+        """Delete a testimonial"""
+        try:
+            result = execute_update("DELETE FROM testimonials WHERE id = %s", (testimonial_id,))
+            if result == 0:
+                abort_with_message(404, "Testimonial not found")
+            return jsonify({"message": "Testimonial deleted successfully"})
+        except Exception as e:
+            print(f"Error deleting testimonial: {str(e)}")
+            traceback.print_exc()
+            abort_with_message(500, f"Error deleting testimonial: {str(e)}")

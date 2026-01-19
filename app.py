@@ -28,8 +28,9 @@ from utils.helpers import get_client_ip
 # Get debug mode from environment
 DEBUG_MODE = os.getenv("DEBUG", "False").lower() == "true"
 
-# Initialize Flask app
-app = Flask(__name__)
+# Initialize Flask app with frontend directory as static folder
+# This allows Flask to serve static files from the frontend directory
+app = Flask(__name__, static_folder=str(FRONTEND_DIR), static_url_path='')
 
 # Session configuration
 SECRET_KEY = os.getenv("SECRET_KEY", os.urandom(32).hex())
@@ -182,7 +183,7 @@ def track_request_metrics(response):
 # Import route modules - they will register routes on the app instance
 try:
     # Import route modules - they register routes via register functions
-    from routes import auth, health, properties, partners, testimonials, stats, metrics, cities, amenities, unit_types, logs
+    from routes import auth, health, properties, partners, testimonials, stats, metrics, cities, amenities, unit_types, logs, blogs, inquiries, visitor_info
     auth.register_auth_routes(app)
     health.register_health_routes(app)
     properties.register_properties_routes(app)
@@ -194,6 +195,9 @@ try:
     amenities.register_amenities_routes(app)
     unit_types.register_unit_types_routes(app)
     logs.register_logs_routes(app)
+    blogs.register_blogs_routes(app)
+    inquiries.register_inquiries_routes(app)
+    visitor_info.register_visitor_info_routes(app)
     print("✓ Core route modules loaded successfully")
     
     # Import remaining routes from old app.py

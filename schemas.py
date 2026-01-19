@@ -435,9 +435,9 @@ class PartnerResponseSchema(BaseModel):
     """Partner response schema"""
     id: int
     name: str
-    logo_url: Optional[str]
-    website_url: Optional[str]
-    description: Optional[str]
+    logo_url: Optional[str] = None
+    website_url: Optional[str] = None
+    description: Optional[str] = None
     is_active: bool
     display_order: int
     created_at: Optional[datetime] = None
