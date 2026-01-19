@@ -3,8 +3,8 @@ Partners routes
 """
 from flask import request, jsonify
 import traceback
-from database import execute_query, execute_update
-from schemas import PartnerResponseSchema, PartnerUpdateSchema
+from database import execute_query, execute_update, execute_insert
+from schemas import PartnerResponseSchema, PartnerUpdateSchema, PartnerCreateSchema
 from utils.helpers import normalize_image_url, abort_with_message, require_admin_auth
 
 
@@ -65,6 +65,55 @@ def register_partners_routes(app):
             print(f"Error fetching partners: {error_msg}")
             traceback.print_exc()
             abort_with_message(500, f"Error fetching partners: {error_msg}")
+    
+    @app.route("/api/partners", methods=["POST"])
+    @require_admin_auth
+    def create_partner():
+        """Create a new partner"""
+        try:
+            data = request.get_json()
+            if not data:
+                abort_with_message(400, "Invalid request data")
+            
+            partner_data = PartnerCreateSchema(**data)
+            
+            insert_query = """
+                INSERT INTO partners (name, logo_url, website_url, is_active, display_order)
+                VALUES (%s, %s, %s, %s, %s)
+            """
+            
+            partner_id = execute_insert(insert_query, (
+                partner_data.name,
+                partner_data.logo_url,
+                partner_data.website_url,
+                1 if partner_data.is_active else 0,
+                partner_data.display_order
+            ))
+            
+            # Return the created partner
+            partners = execute_query("SELECT * FROM partners WHERE id = %s", (partner_id,))
+            partner_dict = dict(partners[0])
+            if 'logo_url' in partner_dict and partner_dict['logo_url']:
+                partner_dict['logo_url'] = normalize_image_url(partner_dict['logo_url'])
+            
+            # Ensure all required fields are present
+            if 'is_active' in partner_dict and isinstance(partner_dict['is_active'], int):
+                partner_dict['is_active'] = bool(partner_dict['is_active'])
+            if 'display_order' not in partner_dict:
+                partner_dict['display_order'] = 0
+            if 'description' not in partner_dict:
+                partner_dict['description'] = None
+            if 'created_at' not in partner_dict:
+                partner_dict['created_at'] = None
+            if 'updated_at' not in partner_dict:
+                partner_dict['updated_at'] = None
+            
+            response = PartnerResponseSchema(**partner_dict)
+            return jsonify(response.dict()), 201
+        except Exception as e:
+            print(f"Error creating partner: {str(e)}")
+            traceback.print_exc()
+            abort_with_message(500, f"Error creating partner: {str(e)}")
     
     @app.route("/api/partners/<int:partner_id>", methods=["POST"])
     @require_admin_auth

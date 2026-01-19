@@ -19,6 +19,16 @@ def register_properties_routes(app):
     """Register properties routes"""
     
     @app.route("/api/properties", methods=["GET"])
+    def get_properties_route():
+        """Get all properties with filtering and pagination"""
+        return get_properties()
+    
+    @app.route("/api/properties", methods=["POST"])
+    @require_admin_auth
+    def create_property_route():
+        """Create a new property"""
+        return create_property()
+    
     def get_properties():
         """Get all properties with filtering and pagination"""
         try:
@@ -115,7 +125,8 @@ def register_properties_routes(app):
                     is_featured, is_active, created_at, updated_at,
                     'residential' as property_category,
                     NULL as plot_area, NULL as plot_length, NULL as plot_breadth,
-                    NULL as project_name
+                    NULL as project_name,
+                    type as property_type
                 FROM residential_properties
                 WHERE {residential_where}
                 ORDER BY created_at DESC
@@ -238,6 +249,203 @@ def register_properties_routes(app):
             traceback.print_exc()
             abort_with_message(500, f"Error fetching properties: {error_msg}")
     
+    def create_property():
+        """Create a new property (residential or plot) based on property_type"""
+        try:
+            data = request.get_json()
+            if not data:
+                abort_with_message(400, "Invalid request data")
+            
+            property_type = data.get("property_type")
+            if not property_type:
+                # Try to infer from other fields
+                if data.get("unit_type") or data.get("bedrooms") is not None:
+                    property_type = "apartments"  # Default to apartments
+                else:
+                    property_type = "plot_properties"
+            
+            # Determine if it's a plot property or residential property
+            is_plot = property_type == "plot_properties"
+            
+            # Map frontend property_type to DB type
+            _type_map = {
+                "individual_house": "house",
+                "apartments": "apartment", 
+                "villas": "villa",
+                "plot_properties": "plot"
+            }
+            db_type = _type_map.get(property_type, property_type)
+            
+            # Handle status and property_status
+            _status = data.get("status", "sale")
+            _pstat = None if _status in ("sale", "rent") else data.get("property_status")
+            
+            if is_plot:
+                # Create plot property
+                city = data.get("city")
+                locality = data.get("locality")
+                project_name = data.get("property_name") or data.get("project_name")
+                
+                if not city or not locality or not project_name:
+                    abort_with_message(400, "City, locality, and project name are required")
+                
+                plot_area = safe_float(data.get("plot_area"), 0.0)
+                plot_length = safe_float(data.get("plot_length") or data.get("length"), 0.0)
+                plot_breadth = safe_float(data.get("plot_breadth") or data.get("breadth"), 0.0)
+                price = safe_float(data.get("price"), 0.0)
+                
+                if price <= 0:
+                    abort_with_message(400, "Price is required and must be greater than 0")
+                
+                insert_query = """
+                    INSERT INTO plot_properties (
+                        city, locality, project_name, plot_area, plot_length, plot_breadth,
+                        price, price_text, price_negotiable, price_includes_registration,
+                        status, property_status, description,
+                        location_link, directions, builder, total_acres,
+                        is_featured, is_active
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """
+                
+                property_id = execute_insert(insert_query, (
+                    city, locality, project_name, plot_area, plot_length, plot_breadth,
+                    price, data.get("price_text"), 
+                    1 if data.get("price_negotiable") else 0,
+                    1 if data.get("price_includes_registration") else 0,
+                    _status, _pstat, data.get("description"),
+                    data.get("location_link"), data.get("directions"),
+                    data.get("builder"), safe_float(data.get("total_acres"), None),
+                    1 if data.get("is_featured") else 0,
+                    1 if data.get("is_active", True) else 0
+                ))
+                
+                img_table = "plot_property_images"
+                feature_category = "plot"
+            else:
+                # Create residential property
+                city = data.get("city")
+                locality = data.get("locality")
+                property_name = data.get("property_name")
+                
+                if not city or not locality or not property_name:
+                    abort_with_message(400, "City, locality, and property name are required")
+                
+                unit_type = data.get("unit_type", "bhk")
+                bedrooms = safe_int(data.get("bedrooms"), 1)
+                bathrooms = safe_float(data.get("bathrooms") or data.get("bathrooms_count"), 0.0)
+                buildup_area = safe_float(data.get("buildup_area"), 0.0)
+                carpet_area = safe_float(data.get("carpet_area"), 0.0)
+                super_buildup_area = safe_float(data.get("super_buildup_area") or data.get("super_buildup_area"), None)
+                price = safe_float(data.get("price"), 0.0)
+                
+                if price <= 0:
+                    abort_with_message(400, "Price is required and must be greater than 0")
+                
+                # Map property_type to DB type
+                db_property_type = _type_map.get(property_type, "apartment")
+                
+                insert_query = """
+                    INSERT INTO residential_properties (
+                        city, locality, property_name, unit_type, bedrooms, bathrooms,
+                        buildup_area, carpet_area, super_built_up_area,
+                        price, price_text, price_negotiable, price_includes_registration,
+                        type, status, property_status, description,
+                        location_link, directions, length, breadth,
+                        builder, configuration, total_flats, total_floors, total_acres,
+                        is_featured, is_active
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """
+                
+                property_id = execute_insert(insert_query, (
+                    city, locality, property_name, unit_type, bedrooms, bathrooms,
+                    buildup_area, carpet_area, super_buildup_area,
+                    price, data.get("price_text"),
+                    1 if data.get("price_negotiable") else 0,
+                    1 if data.get("price_includes_registration") else 0,
+                    db_property_type, _status, _pstat, data.get("description"),
+                    data.get("location_link"), data.get("directions"),
+                    safe_float(data.get("length"), None),
+                    safe_float(data.get("breadth"), None),
+                    data.get("builder"), data.get("configuration"),
+                    safe_int(data.get("total_flats"), None),
+                    safe_int(data.get("total_floors"), None),
+                    safe_float(data.get("total_acres"), None),
+                    1 if data.get("is_featured") else 0,
+                    1 if data.get("is_active", True) else 0
+                ))
+                
+                img_table = "residential_property_images"
+                feature_category = "residential"
+            
+            # Handle images from gallery
+            image_gallery = data.get("image_gallery") or []
+            images = data.get("images") or []
+            
+            # Process gallery images if available
+            if image_gallery:
+                try:
+                    for idx, gallery_item in enumerate(image_gallery):
+                        image_url = gallery_item.get("image_url")
+                        if image_url:
+                            # Process and normalize image URL
+                            processed_urls = process_image_urls([image_url], None)
+                            if processed_urls:
+                                image_category = gallery_item.get("category", "project")
+                                # Map frontend categories to DB categories
+                                category_map = {
+                                    "project": "project",
+                                    "floorplan": "floorplan",
+                                    "masterplan": "masterplan"
+                                }
+                                db_category = category_map.get(image_category, "project")
+                                
+                                execute_insert(
+                                    f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
+                                    (property_id, processed_urls[0], db_category, idx)
+                                )
+                except Exception as img_err:
+                    print(f"Warning: could not insert gallery images for property {property_id}: {img_err}")
+            
+            # Fallback to flat images list if gallery is empty
+            if not image_gallery and images:
+                try:
+                    processed = process_image_urls(images, None)
+                    for idx, url in enumerate(processed):
+                        if url:
+                            execute_insert(
+                                f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
+                                (property_id, url, 'project', idx)
+                            )
+                except Exception as img_err:
+                    print(f"Warning: could not insert images for property {property_id}: {img_err}")
+            
+            # Handle features/amenities
+            features = data.get("features") or data.get("amenities") or []
+            if features:
+                try:
+                    for name in features:
+                        if name:
+                            execute_insert(
+                                "INSERT IGNORE INTO property_features (property_category, property_id, feature_name) VALUES (%s, %s, %s)",
+                                (feature_category, property_id, name)
+                            )
+                except Exception as fe:
+                    print(f"Warning: could not insert features for property {property_id}: {fe}")
+            
+            return jsonify({"message": "Property created successfully", "id": property_id}), 201
+        except ValueError as e:
+            error_msg = f"Invalid data type: {str(e)}"
+            print(f"Error creating property: {error_msg}")
+            print(f"Received data: {request.get_json()}")
+            traceback.print_exc()
+            abort_with_message(400, error_msg)
+        except Exception as e:
+            error_msg = f"Error creating property: {str(e)}"
+            print(error_msg)
+            print(f"Received data: {request.get_json()}")
+            traceback.print_exc()
+            abort_with_message(500, error_msg)
+    
     @app.route("/api/properties/<int:property_id>", methods=["GET"])
     def get_property(property_id: int):
         """Get a single property by ID with images and features"""
@@ -246,13 +454,16 @@ def register_properties_routes(app):
             residential_query = """
                 SELECT 
                     id, city, locality, property_name as title, property_name, 
-                    unit_type, bedrooms, buildup_area as area, buildup_area, carpet_area, 
-                    price, price_text, price_negotiable, price_includes_registration,
+                    unit_type, bedrooms, bathrooms, buildup_area as area, buildup_area, carpet_area, 
+                    super_built_up_area, price, price_text, price_negotiable, price_includes_registration,
                     type, status, property_status, description,
+                    location_link, directions, length, breadth,
+                    builder, configuration, total_flats, total_floors, total_acres,
                     is_featured, is_active, created_at, updated_at,
                     'residential' as property_category,
                     NULL as plot_area, NULL as plot_length, NULL as plot_breadth,
-                    NULL as project_name, 0 as bathrooms
+                    NULL as project_name,
+                    type as property_type
                 FROM residential_properties
                 WHERE id = %s
             """
@@ -264,13 +475,16 @@ def register_properties_routes(app):
                 plot_query = """
                     SELECT 
                         id, city, locality, project_name as title, project_name as property_name,
-                        NULL as unit_type, 0 as bedrooms, plot_area as area, NULL as buildup_area, NULL as carpet_area,
-                        price, price_text, price_negotiable, price_includes_registration,
+                        NULL as unit_type, 0 as bedrooms, 0 as bathrooms, plot_area as area, NULL as buildup_area, NULL as carpet_area,
+                        NULL as super_built_up_area, price, price_text, price_negotiable, price_includes_registration,
                         'plot' as type, status, property_status, description,
+                        location_link, directions, NULL as length, NULL as breadth,
+                        builder, NULL as configuration, NULL as total_flats, NULL as total_floors, total_acres,
                         is_featured, is_active, created_at, updated_at,
                         'plot' as property_category,
                         plot_area, plot_length, plot_breadth,
-                        project_name, 0 as bathrooms
+                        project_name,
+                        'plot_properties' as property_type
                     FROM plot_properties
                     WHERE id = %s
                 """
@@ -322,6 +536,26 @@ def register_properties_routes(app):
             except Exception as img_err:
                 print(f"Warning: could not load images for property {property_id}: {img_err}")
             property_data['images'] = normalized_images
+            
+            # Build image_gallery array for frontend
+            image_gallery = []
+            for img in normalized_images:
+                image_category = img.get('image_type', 'project')
+                # Map DB categories to frontend categories
+                category_map = {
+                    'project': 'project',
+                    'floorplan': 'floorplan',
+                    'masterplan': 'masterplan'
+                }
+                frontend_category = category_map.get(image_category, 'project')
+                image_gallery.append({
+                    'image_url': img.get('image_url'),
+                    'category': frontend_category,
+                    'title': '',  # Images don't have titles in DB yet
+                    'order': img.get('image_order', 0)
+                })
+            property_data['image_gallery'] = image_gallery
+            
             property_data['project_images'] = []
             property_data['floorplan_images'] = []
             property_data['masterplan_images'] = []
@@ -329,10 +563,10 @@ def register_properties_routes(app):
             # Get features (wrap in try/except – table or column may not exist)
             try:
                 features = execute_query(
-                    "SELECT * FROM property_features WHERE property_category = %s AND property_id = %s",
+                    "SELECT feature_name FROM property_features WHERE property_category = %s AND property_id = %s",
                     (property_category, property_id)
                 )
-                property_data['features'] = [dict(feat) for feat in features]
+                property_data['features'] = [feat.get('feature_name') for feat in features if feat.get('feature_name')]
             except Exception as feat_err:
                 print(f"Warning: could not load features for property {property_id}: {feat_err}")
                 property_data['features'] = []
@@ -533,287 +767,11 @@ def register_properties_routes(app):
     @app.route("/api/residential-properties", methods=["POST"])
     @require_admin_auth
     def create_residential_property():
-        """Create a new residential property"""
-        try:
-            data = request.get_json()
-            print(f"[DEBUG] Received data for residential property: {data}")
-            if not data:
-                abort_with_message(400, "Invalid request data: No JSON data received")
-            
-            # Validate and extract required fields with safe type conversion
-            city = data.get('city')
-            locality = data.get('locality')
-            property_name = data.get('property_name')
-            
-            # Validate required fields first
-            if not city or not isinstance(city, str) or not city.strip():
-                abort_with_message(400, "Invalid or missing 'city' field")
-            if not locality or not isinstance(locality, str) or not locality.strip():
-                abort_with_message(400, "Invalid or missing 'locality' field")
-            if not property_name or not isinstance(property_name, str) or not property_name.strip():
-                abort_with_message(400, "Invalid or missing 'property_name' field")
-            
-            # Clean string fields
-            city = city.strip()
-            locality = locality.strip()
-            property_name = property_name.strip()
-            
-            unit_type = data.get('unit_type', 'bhk')
-            bedrooms = safe_int(data.get('bedrooms'), 1)
-            bathrooms = safe_float(data.get('bathrooms'), 0.0)
-            buildup_area = safe_float(data.get('buildup_area'), 0.0)
-            carpet_area = safe_float(data.get('carpet_area'), 0.0)
-            super_built_up_area = safe_float(data.get('super_built_up_area'), None) if data.get('super_built_up_area') is not None else None
-            
-            # Price validation - ensure it's a valid number
-            price_raw = data.get('price')
-            price = safe_float(price_raw, 0.0)
-            if price <= 0:
-                print(f"[WARNING] Price is {price} (from raw value: {price_raw}). Using default 1.0")
-                price = 1.0  # Database requires NOT NULL and > 0
-            price_text = data.get('price_text')
-            price_negotiable = 1 if data.get('price_negotiable') else 0
-            price_includes_registration = 1 if data.get('price_includes_registration') else 0
-            property_type = data.get('type', 'apartment')
-            status = data.get('status', 'sale')
-            # Validate status matches database CHECK constraint: ('sale', 'rent', 'resale', 'new')
-            if status not in ['sale', 'rent', 'resale', 'new']:
-                abort_with_message(400, f"Invalid status value: {status}. Must be one of: sale, rent, resale, new")
-            # When status is 'sale' or 'rent', property_status must be NULL (residential_properties_chk_2)
-            property_status = None if status in ('sale', 'rent') else data.get('property_status')
-            description = data.get('description')
-            location_link = data.get('location_link')
-            directions = data.get('directions') or data.get('direction')  # Handle both singular and plural
-            length = safe_float(data.get('length'), None) if data.get('length') is not None else None
-            breadth = safe_float(data.get('breadth'), None) if data.get('breadth') is not None else None
-            builder = data.get('builder')
-            configuration = data.get('configuration')
-            total_flats = safe_int(data.get('total_flats'), None) if data.get('total_flats') is not None else None
-            total_floors = safe_int(data.get('total_floors'), None) if data.get('total_floors') is not None else None
-            total_acres = safe_float(data.get('total_acres'), None) if data.get('total_acres') is not None else None
-            is_featured = 1 if data.get('is_featured') else 0
-            is_active = 1 if data.get('is_active', True) else 0
-            images = data.get('images', [])
-            features = data.get('features', []) or data.get('amenities', [])
-            
-            # Log the values being inserted for debugging
-            print(f"[DEBUG] Residential property values: city={city}, locality={locality}, property_name={property_name}")
-            print(f"[DEBUG] Dimensions: buildup_area={buildup_area}, carpet_area={carpet_area}, length={length}, breadth={breadth}")
-            print(f"[DEBUG] Price: {price} (type: {type(price)}, raw: {price_raw})")
-            print(f"[DEBUG] Status: {status}, property_status: {property_status}")
-            print(f"[DEBUG] Bedrooms: {bedrooms}, Bathrooms: {bathrooms}")
-            
-            insert_query = """
-                INSERT INTO residential_properties (
-                    city, locality, property_name, unit_type,
-                    bedrooms, bathrooms,
-                    buildup_area, carpet_area, super_built_up_area,
-                    price, price_text, price_negotiable, price_includes_registration,
-                    type, status, property_status, description,
-                    location_link, directions, length, breadth,
-                    builder, configuration, total_flats, total_floors, total_acres,
-                    is_featured, is_active
-                ) VALUES (
-                    %s, %s, %s, %s,
-                    %s, %s,
-                    %s, %s, %s,
-                    %s, %s, %s, %s,
-                    %s, %s, %s, %s,
-                    %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s,
-                    %s, %s
-                )
-            """
-            
-            insert_params = (
-                city, locality, property_name, unit_type,
-                bedrooms, bathrooms,
-                buildup_area, carpet_area, super_built_up_area,
-                price, price_text, price_negotiable, price_includes_registration,
-                property_type, status, property_status, description,
-                location_link, directions, length, breadth,
-                builder, configuration, total_flats, total_floors, total_acres,
-                is_featured, is_active
-            )
-            
-            # Validate placeholder count matches params count
-            placeholder_count = insert_query.count('%s')
-            params_count = len(insert_params)
-            if placeholder_count != params_count:
-                error_msg = f"SQL placeholder count ({placeholder_count}) does not match params count ({params_count})"
-                print(f"[ERROR] {error_msg}")
-                print(f"[ERROR] Query: {insert_query}")
-                print(f"[ERROR] Params: {insert_params}")
-                abort_with_message(500, f"Database query error: {error_msg}")
-            
-            print(f"[DEBUG] Insert params ({params_count} values): {insert_params}")
-            
-            property_id = execute_insert(insert_query, insert_params)
-            
-            # Insert images into unified residential_property_images table
-            if images:
-                processed_images = process_image_urls(images, IMAGES_DIR)
-                for idx, image_url in enumerate(processed_images):
-                    image_query = "INSERT INTO residential_property_images (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)"
-                    execute_insert(image_query, (property_id, image_url, 'project', idx))
-            
-            # Insert features into unified property_features table
-            if features:
-                for feature_name in features:
-                    feature_query = "INSERT IGNORE INTO property_features (property_category, property_id, feature_name) VALUES (%s, %s, %s)"
-                    execute_update(feature_query, ('residential', property_id, feature_name))
-            
-            return jsonify({"message": "Residential property created successfully", "id": property_id}), 201
-        except ValueError as e:
-            error_msg = f"Invalid data type: {str(e)}"
-            print(f"[ERROR] ValueError creating residential property: {error_msg}")
-            print(f"[ERROR] Received data: {request.get_json()}")
-            traceback.print_exc()
-            abort_with_message(400, f"Invalid data format: {str(e)}")
-        except KeyError as e:
-            error_msg = f"Missing required field: {str(e)}"
-            print(f"[ERROR] KeyError creating residential property: {error_msg}")
-            print(f"[ERROR] Received data: {request.get_json()}")
-            traceback.print_exc()
-            abort_with_message(400, error_msg)
-        except Exception as e:
-            error_msg = f"Error creating residential property: {str(e)}"
-            error_type = type(e).__name__
-            print(f"[ERROR] {error_type} creating residential property: {error_msg}")
-            print(f"[ERROR] Received data: {request.get_json()}")
-            print(f"[ERROR] Exception details:")
-            traceback.print_exc()
-            # Return more detailed error message for debugging
-            abort_with_message(500, f"Server error ({error_type}): {str(e)}")
+        """Create property functionality has been removed"""
+        abort_with_message(403, "Property creation functionality has been disabled")
     
     @app.route("/api/plot-properties", methods=["POST"])
     @require_admin_auth
     def create_plot_property():
-        """Create a new plot property"""
-        try:
-            data = request.get_json()
-            print(f"[DEBUG] Received data for plot property: {data}")
-            if not data:
-                abort_with_message(400, "Invalid request data")
-            
-            # Validate and extract required fields with safe type conversion
-            city = data.get('city')
-            locality = data.get('locality')
-            project_name = data.get('project_name')
-            
-            # Validate required fields first
-            if not city or not isinstance(city, str) or not city.strip():
-                abort_with_message(400, "Invalid or missing 'city' field")
-            if not locality or not isinstance(locality, str) or not locality.strip():
-                abort_with_message(400, "Invalid or missing 'locality' field")
-            if not project_name or not isinstance(project_name, str) or not project_name.strip():
-                abort_with_message(400, "Invalid or missing 'project_name' field")
-            
-            # Clean string fields
-            city = city.strip()
-            locality = locality.strip()
-            project_name = project_name.strip()
-            
-            # Ensure plot dimensions are never None (database requires NOT NULL)
-            plot_area = safe_float(data.get('plot_area'), 0.0)
-            plot_length = safe_float(data.get('plot_length'), 0.0)
-            plot_breadth = safe_float(data.get('plot_breadth'), 0.0)
-            
-            # Price validation - ensure it's a valid number
-            price_raw = data.get('price')
-            price = safe_float(price_raw, 0.0)
-            if price <= 0:
-                print(f"[WARNING] Price is {price} (from raw value: {price_raw}). Using default 1.0")
-                price = 1.0  # Database requires NOT NULL and > 0
-            price_text = data.get('price_text')
-            price_negotiable = 1 if data.get('price_negotiable') else 0
-            price_includes_registration = 1 if data.get('price_includes_registration') else 0
-            status = data.get('status', 'sale')
-            # Validate status matches database CHECK constraint: ('sale', 'rent', 'resale', 'new')
-            if status not in ['sale', 'rent', 'resale', 'new']:
-                abort_with_message(400, f"Invalid status value: {status}. Must be one of: sale, rent, resale, new")
-            # When status is 'sale' or 'rent', property_status must be NULL (plot_properties_chk_2)
-            property_status = None if status in ('sale', 'rent') else data.get('property_status')
-            description = data.get('description')
-            location_link = data.get('location_link')
-            directions = data.get('directions') or data.get('direction')  # Handle both singular and plural
-            builder = data.get('builder')
-            total_acres = safe_float(data.get('total_acres'), None) if data.get('total_acres') is not None else None
-            is_featured = 1 if data.get('is_featured') else 0
-            is_active = 1 if data.get('is_active', True) else 0
-            images = data.get('images', [])
-            features = data.get('features', []) or data.get('amenities', [])
-            
-            # Log the values being inserted for debugging
-            print(f"[DEBUG] Plot property values: city={city}, locality={locality}, project_name={project_name}")
-            print(f"[DEBUG] Plot dimensions: plot_area={plot_area} (type: {type(plot_area)}), plot_length={plot_length}, plot_breadth={plot_breadth}")
-            print(f"[DEBUG] Price: {price} (type: {type(price)}, raw: {price_raw})")
-            print(f"[DEBUG] Status: {status}, property_status: {property_status}")
-            
-            insert_query = """
-                INSERT INTO plot_properties (
-                    city, locality, project_name, plot_area, plot_length, plot_breadth,
-                    price, price_text, price_negotiable, price_includes_registration,
-                    status, property_status, description,
-                    location_link, directions, builder, total_acres,
-                    is_featured, is_active
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """
-            
-            insert_params = (
-                city, locality, project_name, plot_area, plot_length, plot_breadth,
-                price, price_text, price_negotiable, price_includes_registration,
-                status, property_status, description,
-                location_link, directions, builder, total_acres,
-                is_featured, is_active
-            )
-            
-            # Validate placeholder count matches params count
-            placeholder_count = insert_query.count('%s')
-            params_count = len(insert_params)
-            if placeholder_count != params_count:
-                error_msg = f"SQL placeholder count ({placeholder_count}) does not match params count ({params_count})"
-                print(f"[ERROR] {error_msg}")
-                print(f"[ERROR] Query: {insert_query}")
-                print(f"[ERROR] Params: {insert_params}")
-                abort_with_message(500, f"Database query error: {error_msg}")
-            
-            print(f"[DEBUG] Insert params ({params_count} values): {insert_params}")
-            
-            property_id = execute_insert(insert_query, insert_params)
-            
-            # Insert images into unified plot_property_images table
-            if images:
-                processed_images = process_image_urls(images, IMAGES_DIR)
-                for idx, image_url in enumerate(processed_images):
-                    image_query = "INSERT INTO plot_property_images (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)"
-                    execute_insert(image_query, (property_id, image_url, 'project', idx))
-            
-            # Insert features into unified property_features table
-            if features:
-                for feature_name in features:
-                    feature_query = "INSERT IGNORE INTO property_features (property_category, property_id, feature_name) VALUES (%s, %s, %s)"
-                    execute_update(feature_query, ('plot', property_id, feature_name))
-            
-            return jsonify({"message": "Plot property created successfully", "id": property_id}), 201
-        except ValueError as e:
-            error_msg = f"Invalid data type: {str(e)}"
-            print(f"[ERROR] ValueError creating plot property: {error_msg}")
-            print(f"[ERROR] Received data: {request.get_json()}")
-            traceback.print_exc()
-            abort_with_message(400, f"Invalid data format: {str(e)}")
-        except KeyError as e:
-            error_msg = f"Missing required field: {str(e)}"
-            print(f"[ERROR] KeyError creating plot property: {error_msg}")
-            print(f"[ERROR] Received data: {request.get_json()}")
-            traceback.print_exc()
-            abort_with_message(400, error_msg)
-        except Exception as e:
-            error_msg = f"Error creating plot property: {str(e)}"
-            error_type = type(e).__name__
-            print(f"[ERROR] {error_type} creating plot property: {error_msg}")
-            print(f"[ERROR] Received data: {request.get_json()}")
-            print(f"[ERROR] Exception details:")
-            traceback.print_exc()
-            # Return more detailed error message for debugging
-            abort_with_message(500, f"Server error ({error_type}): {str(e)}")
+        """Create property functionality has been removed"""
+        abort_with_message(403, "Property creation functionality has been disabled")

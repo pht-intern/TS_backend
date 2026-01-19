@@ -131,13 +131,24 @@ def register_stats_routes(app):
         """Get dashboard statistics (admin endpoint)"""
         try:
             def get_count(query):
-                result = execute_query(query)
-                return result[0]['count'] if result else 0
+                """Safely get count from query result"""
+                try:
+                    result = execute_query(query)
+                    if result and len(result) > 0 and result[0]:
+                        count = result[0].get('count', 0)
+                        # Handle both int and string counts
+                        return int(count) if count is not None else 0
+                    return 0
+                except Exception as e:
+                    print(f"Warning: Error executing count query: {query[:100]}... Error: {str(e)}")
+                    return 0
             
-            # Count properties from both tables
+            # Count properties from both tables - Guard: Handle missing tables gracefully
             total_properties = get_count("SELECT COUNT(*) as count FROM (SELECT id FROM residential_properties UNION ALL SELECT id FROM plot_properties) as combined")
             active_properties = get_count("SELECT COUNT(*) as count FROM (SELECT id FROM residential_properties WHERE is_active = 1 UNION ALL SELECT id FROM plot_properties WHERE is_active = 1) as combined")
             featured_properties = get_count("SELECT COUNT(*) as count FROM (SELECT id FROM residential_properties WHERE is_featured = 1 UNION ALL SELECT id FROM plot_properties WHERE is_featured = 1) as combined")
+            
+            # Guard: Handle tables that might not exist
             total_partners = get_count("SELECT COUNT(*) as count FROM partners")
             active_partners = get_count("SELECT COUNT(*) as count FROM partners WHERE is_active = 1")
             total_testimonials = get_count("SELECT COUNT(*) as count FROM testimonials")
@@ -146,19 +157,36 @@ def register_stats_routes(app):
             total_inquiries = get_count("SELECT COUNT(*) as count FROM contact_inquiries")
             total_logs = get_count("SELECT COUNT(*) as count FROM logs")
             
-            # Get type stats from both tables
-            type_stats_res = execute_query("SELECT type, COUNT(*) as count FROM residential_properties GROUP BY type")
-            type_stats_plot = execute_query("SELECT 'plot' as type, COUNT(*) as count FROM plot_properties")
+            # Get type stats from both tables - Guard: Handle empty results
             properties_by_type = {}
-            if type_stats_res:
-                for row in type_stats_res:
-                    properties_by_type[row['type']] = row['count']
-            if type_stats_plot and type_stats_plot[0]['count'] > 0:
-                properties_by_type['plot'] = properties_by_type.get('plot', 0) + type_stats_plot[0]['count']
+            try:
+                type_stats_res = execute_query("SELECT type, COUNT(*) as count FROM residential_properties GROUP BY type")
+                if type_stats_res:
+                    for row in type_stats_res:
+                        if row and 'type' in row and 'count' in row:
+                            properties_by_type[row['type']] = int(row['count']) if row['count'] is not None else 0
+            except Exception as e:
+                print(f"Warning: Error fetching residential property type stats: {str(e)}")
             
-            # Get status stats from both tables
-            status_stats = execute_query("SELECT status, COUNT(*) as count FROM (SELECT status FROM residential_properties UNION ALL SELECT status FROM plot_properties) as combined GROUP BY status")
-            properties_by_status = {row['status']: row['count'] for row in status_stats} if status_stats else {}
+            try:
+                type_stats_plot = execute_query("SELECT 'plot' as type, COUNT(*) as count FROM plot_properties")
+                if type_stats_plot and len(type_stats_plot) > 0 and type_stats_plot[0]:
+                    plot_count = type_stats_plot[0].get('count', 0)
+                    if plot_count and int(plot_count) > 0:
+                        properties_by_type['plot'] = properties_by_type.get('plot', 0) + int(plot_count)
+            except Exception as e:
+                print(f"Warning: Error fetching plot property type stats: {str(e)}")
+            
+            # Get status stats from both tables - Guard: Handle empty results
+            properties_by_status = {}
+            try:
+                status_stats = execute_query("SELECT status, COUNT(*) as count FROM (SELECT status FROM residential_properties UNION ALL SELECT status FROM plot_properties) as combined GROUP BY status")
+                if status_stats:
+                    for row in status_stats:
+                        if row and 'status' in row and 'count' in row:
+                            properties_by_status[row['status']] = int(row['count']) if row['count'] is not None else 0
+            except Exception as e:
+                print(f"Warning: Error fetching status stats: {str(e)}")
             
             result = DashboardStatsSchema(
                 total_properties=total_properties,

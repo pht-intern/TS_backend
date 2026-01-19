@@ -217,89 +217,92 @@ try:
         # Import the old app module and copy route registrations
         # We'll import it and register routes on our app instance
         import importlib.util
-        spec = importlib.util.spec_from_file_location("old_app_routes", old_app_path)
-        old_app_module = importlib.util.module_from_spec(spec)
-        
-        # Create a mock Flask app for the old module to use
-        # Then we'll copy routes to our app
-        class MockApp:
-            def route(self, *args, **kwargs):
-                def decorator(f):
-                    # Register the route on our actual app
-                    app.route(*args, **kwargs)(f)
-                    return f
-                return decorator
-        
-        # Set up the old module's namespace
-        import sys
-        old_namespace = {
-            'app': MockApp(),
-            'Flask': Flask,
-            'request': request,
-            'jsonify': jsonify,
-            'send_file': send_file,
-            'abort': abort,
-            'make_response': make_response,
-            'url_for': url_for,
-            'CORS': CORS,
-        }
-        
-        # Import all dependencies into namespace
-        from database import get_db_cursor, execute_query, execute_update, execute_insert, test_connection
-        from schemas import *
-        from models import *
-        from utils.helpers import *
-        from utils.auth import *
-        from utils.email import *
-        from utils.cache import *
-        import os, json, traceback, threading, time, base64, uuid, csv, io, re
-        from datetime import datetime
-        from typing import List, Optional, Tuple
-        from pathlib import Path
-        from pydantic import ValidationError
-        
-        old_namespace.update({
-            'get_db_cursor': get_db_cursor,
-            'execute_query': execute_query,
-            'execute_update': execute_update,
-            'execute_insert': execute_insert,
-            'os': os,
-            'json': json,
-            'traceback': traceback,
-            'threading': threading,
-            'time': time,
-            'base64': base64,
-            'uuid': uuid,
-            'csv': csv,
-            'io': io,
-            're': re,
-            'datetime': datetime,
-            'List': List,
-            'Optional': Optional,
-            'Tuple': Tuple,
-            'Path': Path,
-            'FRONTEND_DIR': FRONTEND_DIR,
-            'PROJECT_ROOT': PROJECT_ROOT,
-        })
-        # Import config module paths into namespace
-        # This ensures old routes use the same paths as new routes
-        from config import FRONTEND_DIR as CONFIG_FRONTEND_DIR, IMAGES_DIR, PROJECT_ROOT as CONFIG_PROJECT_ROOT
-        old_namespace['FRONTEND_DIR'] = CONFIG_FRONTEND_DIR
-        old_namespace['IMAGES_DIR'] = IMAGES_DIR
-        old_namespace['PROJECT_ROOT'] = CONFIG_PROJECT_ROOT
-        # For backward compatibility, also set BASE_DIR
-        old_namespace['BASE_DIR'] = CONFIG_PROJECT_ROOT
-        old_namespace.update(globals())
-        
-        # Load the old app module (this will register routes via MockApp)
-        try:
-            spec.loader.exec_module(old_app_module)
-            # Routes are now registered on our app via MockApp
-            print("✓ Routes from backup app.py loaded successfully")
-        except Exception as load_error:
-            print(f"Warning: Error loading routes from backup: {load_error}")
-            import traceback
-            traceback.print_exc()
+        spec = importlib.util.spec_from_file_location("old_app_routes", str(old_app_path))
+        if spec is None:
+            print(f"Warning: Could not create spec for {old_app_path}")
+        else:
+            old_app_module = importlib.util.module_from_spec(spec)
+            
+            # Create a mock Flask app for the old module to use
+            # Then we'll copy routes to our app
+            class MockApp:
+                def route(self, *args, **kwargs):
+                    def decorator(f):
+                        # Register the route on our actual app
+                        app.route(*args, **kwargs)(f)
+                        return f
+                    return decorator
+            
+            # Set up the old module's namespace
+            import sys
+            old_namespace = {
+                'app': MockApp(),
+                'Flask': Flask,
+                'request': request,
+                'jsonify': jsonify,
+                'send_file': send_file,
+                'abort': abort,
+                'make_response': make_response,
+                'url_for': url_for,
+                'CORS': CORS,
+            }
+            
+            # Import all dependencies into namespace
+            from database import get_db_cursor, execute_query, execute_update, execute_insert, test_connection
+            from schemas import *
+            from models import *
+            from utils.helpers import *
+            from utils.auth import *
+            from utils.email import *
+            from utils.cache import *
+            import os, json, traceback, threading, time, base64, uuid, csv, io, re
+            from datetime import datetime
+            from typing import List, Optional, Tuple
+            from pathlib import Path
+            from pydantic import ValidationError
+            
+            old_namespace.update({
+                'get_db_cursor': get_db_cursor,
+                'execute_query': execute_query,
+                'execute_update': execute_update,
+                'execute_insert': execute_insert,
+                'os': os,
+                'json': json,
+                'traceback': traceback,
+                'threading': threading,
+                'time': time,
+                'base64': base64,
+                'uuid': uuid,
+                'csv': csv,
+                'io': io,
+                're': re,
+                'datetime': datetime,
+                'List': List,
+                'Optional': Optional,
+                'Tuple': Tuple,
+                'Path': Path,
+                'FRONTEND_DIR': FRONTEND_DIR,
+                'PROJECT_ROOT': PROJECT_ROOT,
+            })
+            # Import config module paths into namespace
+            # This ensures old routes use the same paths as new routes
+            from config import FRONTEND_DIR as CONFIG_FRONTEND_DIR, IMAGES_DIR, PROJECT_ROOT as CONFIG_PROJECT_ROOT
+            old_namespace['FRONTEND_DIR'] = CONFIG_FRONTEND_DIR
+            old_namespace['IMAGES_DIR'] = IMAGES_DIR
+            old_namespace['PROJECT_ROOT'] = CONFIG_PROJECT_ROOT
+            # For backward compatibility, also set BASE_DIR
+            old_namespace['BASE_DIR'] = CONFIG_PROJECT_ROOT
+            old_namespace.update(globals())
+            
+            # Load the old app module (this will register routes via MockApp)
+            try:
+                spec.loader.exec_module(old_app_module)
+                # Routes are now registered on our app via MockApp
+                print("✓ Routes from backup app.py loaded successfully")
+            except Exception as load_error:
+                print(f"Warning: Error loading routes from backup: {load_error}")
+                import traceback
+                traceback.print_exc()
     else:
         print("Warning: Backup app.py not found. Some routes may not be available.")
         print("Note: Routes should be gradually moved to route modules in backend/routes/")

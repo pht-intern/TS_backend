@@ -324,14 +324,32 @@ def execute_update(query: str, params: tuple = None) -> int:
         validate_db_credentials()  # This will raise a helpful error
         raise RuntimeError("Database engine not initialized. Check environment variables.")
     
+    # Import validation utilities
+    from utils.db_validator import (
+        validate_column_count, auto_sanitize_params,
+        sanitize_params_for_update
+    )
+    
     # Use raw connection for MySQL-style %s placeholders
     raw_conn = None
     try:
+        # Validate and sanitize parameters before execution
+        if params:
+            try:
+                # First validate column count
+                validate_column_count(query, params)
+            except ValueError as ve:
+                print(f"❌ SQL VALIDATION ERROR: {ve}")
+                raise
+        
+        # Auto-sanitize parameters for common issues
+        sanitized_params = auto_sanitize_params(params) if params else None
+        
         raw_conn = engine.raw_connection()
         cursor = raw_conn.cursor()
         try:
-            if params:
-                cursor.execute(query, params)
+            if sanitized_params:
+                cursor.execute(query, sanitized_params)
             else:
                 cursor.execute(query)
             raw_conn.commit()
@@ -339,9 +357,23 @@ def execute_update(query: str, params: tuple = None) -> int:
         except Exception as e:
             if raw_conn:
                 raw_conn.rollback()
-            print(f"Database update error: {str(e)}")
-            print(f"Query: {query}")
-            print(f"Params: {params}")
+            error_msg = str(e)
+            print(f"❌ DATABASE UPDATE ERROR: {error_msg}")
+            print(f"❌ QUERY: {query[:500]}")  # Truncate long queries
+            print(f"❌ PARAMS: {sanitized_params}")
+            
+            # Provide helpful error messages for common MySQL errors
+            if "Column" in error_msg and "cannot be null" in error_msg:
+                print("💡 TIP: A NOT NULL column received NULL. Check your data sanitization.")
+            elif "Incorrect integer value" in error_msg or "Incorrect double value" in error_msg:
+                print("💡 TIP: Empty string or invalid value sent to numeric column. Use None for NULL values.")
+            elif "Data too long" in error_msg or "Data truncated" in error_msg:
+                print("💡 TIP: String value exceeds column length. Truncate before inserting.")
+            elif "Cannot add or update a child row" in error_msg and "foreign key constraint" in error_msg:
+                print("💡 TIP: Foreign key constraint violation. Check that referenced ID exists.")
+            elif "Invalid JSON" in error_msg or "JSON text" in error_msg:
+                print("💡 TIP: Invalid JSON sent to JSON column. Use json.dumps() for Python objects.")
+            
             import traceback
             traceback.print_exc()
             raise e
@@ -358,14 +390,32 @@ def execute_insert(query: str, params: tuple = None) -> int:
         validate_db_credentials()  # This will raise a helpful error
         raise RuntimeError("Database engine not initialized. Check environment variables.")
     
+    # Import validation utilities
+    from utils.db_validator import (
+        validate_column_count, auto_sanitize_params,
+        sanitize_params_for_insert
+    )
+    
     # Use raw connection for MySQL-style %s placeholders
     raw_conn = None
     try:
+        # Validate and sanitize parameters before execution
+        if params:
+            try:
+                # First validate column count
+                validate_column_count(query, params)
+            except ValueError as ve:
+                print(f"❌ SQL VALIDATION ERROR: {ve}")
+                raise
+        
+        # Auto-sanitize parameters for common issues
+        sanitized_params = auto_sanitize_params(params) if params else None
+        
         raw_conn = engine.raw_connection()
         cursor = raw_conn.cursor()
         try:
-            if params:
-                cursor.execute(query, params)
+            if sanitized_params:
+                cursor.execute(query, sanitized_params)
             else:
                 cursor.execute(query)
             raw_conn.commit()
@@ -373,12 +423,26 @@ def execute_insert(query: str, params: tuple = None) -> int:
         except Exception as e:
             if raw_conn:
                 raw_conn.rollback()
-            print(f"Database insert error: {str(e)}")
-            print(f"Query: {query}")
-            print(f"Params: {params}")
+            error_msg = str(e)
+            print("❌ MYSQL INSERT ERROR:", error_msg)
+            print(f"❌ QUERY: {query[:500]}")  # Truncate long queries
+            print(f"❌ PARAMS: {sanitized_params}")
+            
+            # Provide helpful error messages for common MySQL errors
+            if "Column" in error_msg and "cannot be null" in error_msg:
+                print("💡 TIP: A NOT NULL column received NULL. Check your data sanitization.")
+            elif "Incorrect integer value" in error_msg or "Incorrect double value" in error_msg:
+                print("💡 TIP: Empty string or invalid value sent to numeric column. Use None for NULL values.")
+            elif "Data too long" in error_msg or "Data truncated" in error_msg:
+                print("💡 TIP: String value exceeds column length. Truncate before inserting.")
+            elif "Cannot add or update a child row" in error_msg and "foreign key constraint" in error_msg:
+                print("💡 TIP: Foreign key constraint violation. Check that referenced ID exists.")
+            elif "Invalid JSON" in error_msg or "JSON text" in error_msg:
+                print("💡 TIP: Invalid JSON sent to JSON column. Use json.dumps() for Python objects.")
+            
             import traceback
             traceback.print_exc()
-            raise e
+            raise
         finally:
             cursor.close()
     finally:

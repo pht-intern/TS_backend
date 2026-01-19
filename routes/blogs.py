@@ -4,7 +4,7 @@ Blogs routes
 from flask import request, jsonify
 import json
 import traceback
-from database import execute_query, execute_update, get_db_cursor
+from database import execute_query, execute_update, execute_insert
 from schemas import (
     BlogCreateSchema, BlogUpdateSchema, BlogResponseSchema,
     PaginationParams, PaginatedResponse, MessageResponse
@@ -158,20 +158,18 @@ def register_blogs_routes(app):
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             
-            with get_db_cursor() as cursor:
-                cursor.execute(insert_query, (
-                    blog_data.title,
-                    blog_data.excerpt,
-                    blog_data.content,
-                    blog_data.category,
-                    tags_json,
-                    blog_data.image_url,
-                    blog_data.author or 'Tirumakudalu Properties',
-                    blog_data.views or 0,
-                    blog_data.is_featured or False,
-                    blog_data.is_active or True
-                ))
-                blog_id = cursor.lastrowid
+            blog_id = execute_insert(insert_query, (
+                blog_data.title,
+                blog_data.excerpt,
+                blog_data.content,
+                blog_data.category,
+                tags_json,
+                blog_data.image_url,
+                blog_data.author or 'Tirumakudalu Properties',
+                blog_data.views or 0,
+                1 if blog_data.is_featured else 0,
+                1 if blog_data.is_active else 0
+            ))
             
             # Return the created blog
             blog_query = "SELECT * FROM blogs WHERE id = %s"

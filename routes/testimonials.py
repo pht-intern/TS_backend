@@ -5,8 +5,8 @@ from flask import request, jsonify, make_response
 import json
 import re
 import traceback
-from database import execute_query, execute_update
-from schemas import TestimonialPublicSchema, TestimonialResponseSchema, TestimonialUpdateSchema
+from database import execute_query, execute_update, execute_insert
+from schemas import TestimonialPublicSchema, TestimonialResponseSchema, TestimonialUpdateSchema, TestimonialCreateSchema
 from utils.helpers import abort_with_message, require_admin_auth
 
 
@@ -86,6 +86,53 @@ def register_testimonials_routes(app):
                     response.headers['Content-Type'] = 'application/javascript'
                     return response
             abort_with_message(500, f"Error fetching testimonials: {error_msg}")
+    
+    @app.route("/api/testimonials", methods=["POST"])
+    @require_admin_auth
+    def create_testimonial():
+        """Create a new testimonial"""
+        try:
+            data = request.get_json()
+            if not data:
+                abort_with_message(400, "Invalid request data")
+            
+            testimonial_data = TestimonialCreateSchema(**data)
+            
+            insert_query = """
+                INSERT INTO testimonials (
+                    client_name, client_email, client_phone, service_type, 
+                    rating, message, is_approved, is_featured
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            
+            testimonial_id = execute_insert(insert_query, (
+                testimonial_data.client_name,
+                testimonial_data.client_email,
+                testimonial_data.client_phone,
+                testimonial_data.service_type,
+                testimonial_data.rating,
+                testimonial_data.message,
+                1 if testimonial_data.is_approved else 0,
+                1 if testimonial_data.is_featured else 0
+            ))
+            
+            # Return the created testimonial
+            result = execute_query("SELECT * FROM testimonials WHERE id = %s", (testimonial_id,))
+            testimonial_dict = dict(result[0])
+            
+            # Ensure all required fields are present
+            if 'is_featured' not in testimonial_dict:
+                testimonial_dict['is_featured'] = False
+            if 'created_at' not in testimonial_dict:
+                testimonial_dict['created_at'] = None
+            
+            response = TestimonialResponseSchema(**testimonial_dict)
+            return jsonify(response.dict()), 201
+        except Exception as e:
+            print(f"Error creating testimonial: {str(e)}")
+            traceback.print_exc()
+            abort_with_message(500, f"Error creating testimonial: {str(e)}")
     
     @app.route("/api/admin/testimonials", methods=["GET"])
     @require_admin_auth

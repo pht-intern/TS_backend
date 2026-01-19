@@ -227,6 +227,51 @@ def safe_float(value, default=0.0):
         return default
 
 
+def safe_str(value, default='', max_length=None, allow_none=False):
+    """
+    Safely convert a value to string, handling None, empty strings, and truncation.
+    
+    Args:
+        value: The value to convert
+        default: Default value if value is None/empty (for NOT NULL columns)
+        max_length: Maximum length to truncate to (for VARCHAR columns)
+        allow_none: Whether to return None for empty values (for nullable columns)
+    
+    Returns:
+        Sanitized string or None
+    """
+    if value is None:
+        return None if allow_none else default
+    
+    if not isinstance(value, str):
+        value = str(value)
+    
+    value = value.strip()
+    
+    if value == '':
+        return None if allow_none else default
+    
+    if max_length and len(value) > max_length:
+        return value[:max_length]
+    
+    return value
+
+
+def safe_json(value, default=None):
+    """
+    Safely convert a value to JSON string for JSON columns.
+    
+    Args:
+        value: The value to convert (dict, list, str, or None)
+        default: Default JSON string if value is invalid
+    
+    Returns:
+        Valid JSON string or None
+    """
+    from utils.db_validator import sanitize_json
+    return sanitize_json(value, default)
+
+
 def require_admin_auth(f):
     """
     Decorator to require admin authentication for protected routes.
