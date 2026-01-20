@@ -2,11 +2,12 @@
 Unit types routes
 """
 from flask import request, jsonify, make_response
+from datetime import datetime
 import json
 import re
 import traceback
-from database import execute_query
-from utils.helpers import abort_with_message
+from database import execute_query, execute_insert
+from utils.helpers import abort_with_message, require_admin_auth
 
 
 def register_unit_types_routes(app):
@@ -55,3 +56,134 @@ def register_unit_types_routes(app):
                     response.headers['Content-Type'] = 'application/javascript'
                     return response
             abort_with_message(500, f"Error fetching active unit types: {str(e)}")
+    
+    @app.route("/api/admin/unit-types", methods=["GET", "POST"])
+    @require_admin_auth
+    def handle_unit_types():
+        """Handle GET and POST requests for unit types"""
+        if request.method == "GET":
+            return get_all_unit_types()
+        elif request.method == "POST":
+            return create_unit_type()
+    
+    def get_all_unit_types():
+        """Get all unit types (admin endpoint - includes inactive unit types)"""
+        try:
+            query = """
+                SELECT 
+                    ut.id,
+                    ut.name,
+                    ut.display_name,
+                    ut.bedrooms,
+                    ut.is_active,
+                    ut.created_at,
+                    ut.updated_at
+                FROM unit_types ut
+                ORDER BY ut.bedrooms, ut.name
+            """
+            unit_types = execute_query(query)
+            
+            # Convert datetime objects to ISO format strings for JSON serialization
+            def convert_datetime_to_iso(obj):
+                """Recursively convert datetime objects to ISO format strings"""
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                if isinstance(obj, dict):
+                    return {k: convert_datetime_to_iso(v) for k, v in obj.items()}
+                if isinstance(obj, list):
+                    return [convert_datetime_to_iso(v) for v in obj]
+                return obj
+            
+            # Convert datetime fields in unit_types data
+            unit_types_data = [convert_datetime_to_iso(dict(unit_type)) for unit_type in unit_types] if unit_types else []
+            
+            return jsonify(unit_types_data)
+        except Exception as e:
+            print(f"Error fetching all unit types: {str(e)}")
+            traceback.print_exc()
+            abort_with_message(500, f"Error fetching all unit types: {str(e)}")
+    
+    def create_unit_type():
+        """Create a new unit type"""
+        try:
+            data = request.get_json()
+            if not data:
+                abort_with_message(400, "Invalid request data")
+            
+            # Validate required fields
+            name = data.get('name')
+            display_name = data.get('display_name')
+            bedrooms = data.get('bedrooms')
+            
+            if not name:
+                abort_with_message(400, "Unit type name is required")
+            if not display_name:
+                abort_with_message(400, "Unit type display_name is required")
+            if bedrooms is None:
+                abort_with_message(400, "Unit type bedrooms is required")
+            
+            # Validate name length
+            if len(name) > 50:
+                abort_with_message(400, "Unit type name must be 50 characters or less")
+            if len(display_name) > 250:
+                abort_with_message(400, "Unit type display_name must be 250 characters or less")
+            
+            # Validate bedrooms is an integer
+            try:
+                bedrooms = int(bedrooms)
+                if bedrooms < 0:
+                    abort_with_message(400, "Bedrooms must be a non-negative integer")
+            except (ValueError, TypeError):
+                abort_with_message(400, "Bedrooms must be a valid integer")
+            
+            # Check if unit type with same name already exists
+            existing = execute_query("SELECT id FROM unit_types WHERE name = %s", (name,))
+            if existing:
+                abort_with_message(400, f"Unit type with name '{name}' already exists")
+            
+            # Get optional fields
+            is_active = data.get('is_active', True)
+            is_active_int = 1 if is_active else 0
+            
+            # Insert new unit type
+            insert_query = """
+                INSERT INTO unit_types (name, display_name, bedrooms, is_active)
+                VALUES (%s, %s, %s, %s)
+            """
+            
+            unit_type_id = execute_insert(insert_query, (
+                name,
+                display_name,
+                bedrooms,
+                is_active_int
+            ))
+            
+            # Return the created unit type
+            result = execute_query("SELECT * FROM unit_types WHERE id = %s", (unit_type_id,))
+            if not result:
+                abort_with_message(500, "Failed to retrieve created unit type")
+            
+            unit_type_dict = dict(result[0])
+            
+            # Convert datetime objects to ISO format strings
+            def convert_datetime_to_iso(obj):
+                """Recursively convert datetime objects to ISO format strings"""
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                if isinstance(obj, dict):
+                    return {k: convert_datetime_to_iso(v) for k, v in obj.items()}
+                if isinstance(obj, list):
+                    return [convert_datetime_to_iso(v) for v in obj]
+                return obj
+            
+            unit_type_data = convert_datetime_to_iso(unit_type_dict)
+            
+            return jsonify(unit_type_data), 201
+        except Exception as e:
+            error_msg = str(e)
+            print(f"Error creating unit type: {error_msg}")
+            traceback.print_exc()
+            # Check if it's a validation error (already has status code)
+            if "already exists" in error_msg.lower() or "is required" in error_msg.lower() or "must be" in error_msg.lower() or "must be a" in error_msg.lower():
+                abort_with_message(400, error_msg)
+            abort_with_message(500, f"Error creating unit type: {error_msg}")

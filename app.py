@@ -226,7 +226,7 @@ def handle_exception(error):
 # Import route modules - they will register routes on the app instance
 try:
     # Import route modules - they register routes via register functions
-    from routes import auth, health, properties, partners, testimonials, stats, metrics, cities, amenities, unit_types, logs, blogs, inquiries, visitor_info
+    from routes import auth, health, properties, partners, testimonials, stats, metrics, cities, categories, amenities, unit_types, logs, blogs, inquiries, visitor_info
     auth.register_auth_routes(app)
     health.register_health_routes(app)
     properties.register_properties_routes(app)
@@ -235,6 +235,7 @@ try:
     stats.register_stats_routes(app)
     metrics.register_metrics_routes(app)
     cities.register_cities_routes(app)
+    categories.register_categories_routes(app)
     amenities.register_amenities_routes(app)
     unit_types.register_unit_types_routes(app)
     logs.register_logs_routes(app)
