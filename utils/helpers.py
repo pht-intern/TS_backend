@@ -209,6 +209,10 @@ def require_admin_auth(f):
 
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        # Allow OPTIONS requests for CORS preflight without authentication
+        if request.method == "OPTIONS":
+            return f(*args, **kwargs)
+        
         allowed_admin_email = os.getenv("ADMIN_EMAIL")
         if not allowed_admin_email:
             return error_response("Server configuration error", 500)

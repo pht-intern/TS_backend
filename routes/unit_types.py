@@ -77,7 +77,8 @@ def register_unit_types_routes(app):
                     ut.bedrooms,
                     ut.is_active,
                     ut.created_at,
-                    ut.updated_at
+                    ut.updated_at,
+                    (SELECT COUNT(*) FROM residential_properties rp WHERE rp.unit_type = ut.name AND rp.is_active = 1) as properties_count
                 FROM unit_types ut
                 ORDER BY ut.bedrooms, ut.name
             """
@@ -97,7 +98,8 @@ def register_unit_types_routes(app):
             # Convert datetime fields in unit_types data
             unit_types_data = [convert_datetime_to_iso(dict(unit_type)) for unit_type in unit_types] if unit_types else []
             
-            return jsonify(unit_types_data)
+            # Return in the format expected by frontend: {unit_types: [...]}
+            return jsonify({"unit_types": unit_types_data})
         except Exception as e:
             print(f"Error fetching all unit types: {str(e)}")
             traceback.print_exc()

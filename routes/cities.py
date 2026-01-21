@@ -50,7 +50,7 @@ def register_cities_routes(app):
     
     @app.route("/api/cities", methods=["GET"])
     def get_active_cities():
-        """Get all active cities (public endpoint) - returns only important cities for active states"""
+        """Get all active cities (public endpoint) - returns all cities from active states"""
         try:
             query = """
                 SELECT 
@@ -62,46 +62,18 @@ def register_cities_routes(app):
             """
             cities = execute_query(query)
             
-            # Group active cities by state to determine which states are active
-            active_states = set()
-            cities_by_state = {}
-            
+            # Return all active cities (not just important ones)
+            # When a state is activated, all its cities become active and should appear in dropdowns
+            filtered_cities = []
             if cities:
                 for city in cities:
                     city_name = city.get('name', '').strip()
                     state_name = city.get('state', '').strip()
                     
                     if city_name and state_name:
-                        active_states.add(state_name)
-                        if state_name not in cities_by_state:
-                            cities_by_state[state_name] = []
-                        cities_by_state[state_name].append(city_name)
-            
-            # Filter to only include important cities for active states
-            filtered_cities = []
-            for state in active_states:
-                important_cities = IMPORTANT_CITIES_BY_STATE.get(state, [])
-                if important_cities:
-                    # Get all active cities for this state
-                    active_cities_in_state = cities_by_state.get(state, [])
-                    # Create a case-insensitive lookup map
-                    active_cities_lower = {city.lower(): city for city in active_cities_in_state}
-                    important_cities_lower = {city.lower(): city for city in important_cities}
-                    
-                    # Filter to only include important cities that are also active
-                    for important_city_lower, important_city in important_cities_lower.items():
-                        if important_city_lower in active_cities_lower:
-                            # Use the actual city name from database (preserves exact casing)
-                            filtered_cities.append({
-                                'name': active_cities_lower[important_city_lower],
-                                'state': state
-                            })
-                else:
-                    # If no important cities list exists for this state, include all active cities
-                    for city_name in cities_by_state.get(state, []):
                         filtered_cities.append({
                             'name': city_name,
-                            'state': state
+                            'state': state_name
                         })
             
             data = {

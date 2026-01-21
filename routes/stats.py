@@ -2,7 +2,8 @@
 Statistics routes
 """
 from flask import jsonify, request, make_response
-from datetime import datetime
+from datetime import datetime, date
+from decimal import Decimal
 import traceback
 import json
 import re
@@ -210,7 +211,12 @@ def register_stats_routes(app):
                     result = execute_query(query)
                     if result and len(result) > 0 and result[0]:
                         count = result[0].get('count', 0)
-                        # Handle both int and string counts
+                        # Handle int, string, Decimal, and None counts
+                        if count is None:
+                            return 0
+                        # Convert Decimal to int if needed
+                        if isinstance(count, Decimal):
+                            return int(count)
                         return int(count) if count is not None else 0
                     return 0
                 except Exception as e:
@@ -238,7 +244,11 @@ def register_stats_routes(app):
                 if type_stats_res:
                     for row in type_stats_res:
                         if row and 'type' in row and 'count' in row:
-                            properties_by_type[row['type']] = int(row['count']) if row['count'] is not None else 0
+                            count_val = row['count']
+                            # Convert Decimal to int if needed
+                            if isinstance(count_val, Decimal):
+                                count_val = int(count_val)
+                            properties_by_type[row['type']] = int(count_val) if count_val is not None else 0
             except Exception as e:
                 print(f"Warning: Error fetching residential property type stats: {str(e)}")
             
@@ -246,41 +256,91 @@ def register_stats_routes(app):
                 type_stats_plot = execute_query("SELECT 'plot' as type, COUNT(*) as count FROM plot_properties")
                 if type_stats_plot and len(type_stats_plot) > 0 and type_stats_plot[0]:
                     plot_count = type_stats_plot[0].get('count', 0)
+                    # Convert Decimal to int if needed
+                    if isinstance(plot_count, Decimal):
+                        plot_count = int(plot_count)
                     if plot_count and int(plot_count) > 0:
                         properties_by_type['plot'] = properties_by_type.get('plot', 0) + int(plot_count)
             except Exception as e:
                 print(f"Warning: Error fetching plot property type stats: {str(e)}")
             
-            # Get status stats from both tables - Guard: Handle empty results
+            # Get status stats from both tables - Guard: Handle empty results and NULL values
             properties_by_status = {}
             try:
-                status_stats = execute_query("SELECT status, COUNT(*) as count FROM (SELECT status FROM residential_properties UNION ALL SELECT status FROM plot_properties) as combined GROUP BY status")
+                # Handle NULL status values by using COALESCE
+                status_stats = execute_query("""
+                    SELECT 
+                        COALESCE(status, 'unknown') as status, 
+                        COUNT(*) as count 
+                    FROM (
+                        SELECT status FROM residential_properties 
+                        UNION ALL 
+                        SELECT status FROM plot_properties
+                    ) as combined 
+                    GROUP BY COALESCE(status, 'unknown')
+                """)
                 if status_stats:
                     for row in status_stats:
                         if row and 'status' in row and 'count' in row:
-                            properties_by_status[row['status']] = int(row['count']) if row['count'] is not None else 0
+                            status_key = row['status']
+                            # Skip 'unknown' status if it's 0 or handle it gracefully
+                            if status_key and status_key != 'unknown':
+                                count_val = row['count']
+                                # Convert Decimal to int if needed
+                                if isinstance(count_val, Decimal):
+                                    count_val = int(count_val)
+                                properties_by_status[status_key] = int(count_val) if count_val is not None else 0
             except Exception as e:
                 print(f"Warning: Error fetching status stats: {str(e)}")
+                traceback.print_exc()
             
+            # Ensure all required fields have valid values
             result = DashboardStatsSchema(
-                total_properties=total_properties,
-                active_properties=active_properties,
-                featured_properties=featured_properties,
-                total_partners=total_partners,
-                active_partners=active_partners,
-                total_testimonials=total_testimonials,
-                approved_testimonials=approved_testimonials,
-                new_inquiries=new_inquiries,
-                total_inquiries=total_inquiries,
-                total_logs=total_logs,
-                properties_by_type=properties_by_type,
-                properties_by_status=properties_by_status
+                total_properties=int(total_properties) if total_properties is not None else 0,
+                active_properties=int(active_properties) if active_properties is not None else 0,
+                featured_properties=int(featured_properties) if featured_properties is not None else 0,
+                total_partners=int(total_partners) if total_partners is not None else 0,
+                active_partners=int(active_partners) if active_partners is not None else 0,
+                total_testimonials=int(total_testimonials) if total_testimonials is not None else 0,
+                approved_testimonials=int(approved_testimonials) if approved_testimonials is not None else 0,
+                new_inquiries=int(new_inquiries) if new_inquiries is not None else 0,
+                total_inquiries=int(total_inquiries) if total_inquiries is not None else 0,
+                total_logs=int(total_logs) if total_logs is not None else 0,
+                properties_by_type=properties_by_type if properties_by_type else {},
+                properties_by_status=properties_by_status if properties_by_status else {}
             )
-            return jsonify(result.dict())
+            
+            # Convert to dict and ensure all values are JSON serializable
+            result_dict = result.dict()
+            
+            # Double-check all values are serializable
+            def make_serializable(obj):
+                if isinstance(obj, dict):
+                    return {k: make_serializable(v) for k, v in obj.items()}
+                elif isinstance(obj, (list, tuple)):
+                    return [make_serializable(item) for item in obj]
+                elif isinstance(obj, Decimal):
+                    return int(obj)
+                elif isinstance(obj, (datetime, date)):
+                    return obj.isoformat()
+                else:
+                    return obj
+            
+            result_dict = make_serializable(result_dict)
+            
+            response = jsonify(result_dict)
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            return response
         except Exception as e:
             print(f"Error fetching dashboard stats: {str(e)}")
             traceback.print_exc()
-            abort_with_message(500, f"Error fetching dashboard stats: {str(e)}")
+            # Return a safe error response instead of aborting
+            error_response = jsonify({
+                'error': f'Error fetching dashboard stats: {str(e)}',
+                'success': False
+            })
+            error_response.headers['Access-Control-Allow-Origin'] = '*'
+            return error_response, 500
     
     @app.route("/api/admin/stats/page-visits", methods=["GET"])
     @require_admin_auth

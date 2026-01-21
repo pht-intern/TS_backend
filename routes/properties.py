@@ -341,7 +341,17 @@ def register_properties_routes(app):
                 if not city or not locality or not property_name:
                     return error_response("City, locality, and property name are required", 400)
                 
+                # Validate unit_type - must be one of: 'rk', 'bhk', '4plus' (database constraint)
                 unit_type = data.get("unit_type", "bhk")
+                if unit_type not in ("rk", "bhk", "4plus"):
+                    # If invalid, determine based on bedrooms
+                    bedrooms_temp = safe_int(data.get("bedrooms"), 1)
+                    if bedrooms_temp == 0:
+                        unit_type = "rk"
+                    elif bedrooms_temp >= 4:
+                        unit_type = "4plus"
+                    else:
+                        unit_type = "bhk"
                 bedrooms = safe_int(data.get("bedrooms"), 1)
                 bathrooms = safe_float(data.get("bathrooms") or data.get("bathrooms_count"), 0.0)
                 buildup_area = safe_float(data.get("buildup_area"), 0.0)
@@ -681,7 +691,18 @@ def register_properties_routes(app):
                 _add(sets, params, "city", data.get("city"))
                 _add(sets, params, "locality", data.get("locality"))
                 _add(sets, params, "property_name", data.get("property_name"))
-                _add(sets, params, "unit_type", data.get("unit_type"))
+                # Validate unit_type - must be one of: 'rk', 'bhk', '4plus' (database constraint)
+                _unit_type = data.get("unit_type", "bhk")
+                if _unit_type not in ("rk", "bhk", "4plus"):
+                    # If invalid, determine based on bedrooms
+                    _bedrooms = safe_int(data.get("bedrooms"), 1)
+                    if _bedrooms == 0:
+                        _unit_type = "rk"
+                    elif _bedrooms >= 4:
+                        _unit_type = "4plus"
+                    else:
+                        _unit_type = "bhk"
+                _add(sets, params, "unit_type", _unit_type)
                 _add(sets, params, "bedrooms", data.get("bedrooms"), as_int=True)
                 _add(sets, params, "buildup_area", data.get("buildup_area"), as_float=True)
                 _add(sets, params, "carpet_area", data.get("carpet_area"), as_float=True)

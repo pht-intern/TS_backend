@@ -75,7 +75,8 @@ def register_categories_routes(app):
                     c.display_name,
                     c.is_active,
                     c.created_at,
-                    c.updated_at
+                    c.updated_at,
+                    0 as properties_count
                 FROM categories c
                 ORDER BY c.name
             """
@@ -95,7 +96,8 @@ def register_categories_routes(app):
             # Convert datetime fields in categories data
             categories_data = [convert_datetime_to_iso(dict(category)) for category in categories] if categories else []
             
-            return jsonify(categories_data)
+            # Return in the format expected by frontend: {categories: [...]}
+            return jsonify({"categories": categories_data})
         except Exception as e:
             print(f"Error fetching all categories: {str(e)}")
             traceback.print_exc()
