@@ -710,8 +710,10 @@ def register_properties_routes(app):
                         _unit_type = "bhk"
                 _add(sets, params, "unit_type", _unit_type)
                 _add(sets, params, "bedrooms", data.get("bedrooms"), as_int=True)
+                _add(sets, params, "bathrooms", data.get("bathrooms") or data.get("bathrooms_count"), as_float=True)
                 _add(sets, params, "buildup_area", data.get("buildup_area"), as_float=True)
                 _add(sets, params, "carpet_area", data.get("carpet_area"), as_float=True)
+                _add(sets, params, "super_built_up_area", data.get("super_buildup_area") or data.get("super_buildup_area"), as_float=True)
                 _add(sets, params, "price", data.get("price"), as_float=True)
                 _add(sets, params, "price_text", data.get("price_text"))
                 if "price_negotiable" in data: _add(sets, params, "price_negotiable", 1 if data.get("price_negotiable") else 0, as_int=True)
@@ -727,10 +729,15 @@ def register_properties_routes(app):
                 _add(sets, params, "directions", data.get("directions"))
                 _add(sets, params, "length", data.get("length"), as_float=True)
                 _add(sets, params, "breadth", data.get("breadth"), as_float=True)
+                _add(sets, params, "builder", data.get("builder"))
+                _add(sets, params, "configuration", data.get("configuration"))
+                _add(sets, params, "total_flats", data.get("total_flats"), as_int=True)
+                _add(sets, params, "total_floors", data.get("total_floors"), as_int=True)
+                _add(sets, params, "total_acres", data.get("total_acres"), as_float=True)
             else:
                 _add(sets, params, "city", data.get("city"))
                 _add(sets, params, "locality", data.get("locality"))
-                _add(sets, params, "project_name", data.get("project_name"))
+                _add(sets, params, "project_name", data.get("project_name") or data.get("property_name"))
                 _add(sets, params, "plot_area", data.get("plot_area"), as_float=True)
                 _add(sets, params, "plot_length", data.get("plot_length"), as_float=True)
                 _add(sets, params, "plot_breadth", data.get("plot_breadth"), as_float=True)
@@ -746,25 +753,59 @@ def register_properties_routes(app):
                 if "is_active" in data: _add(sets, params, "is_active", 1 if data.get("is_active", True) else 0, as_int=True)
                 _add(sets, params, "location_link", data.get("location_link"))
                 _add(sets, params, "directions", data.get("directions"))
+                _add(sets, params, "builder", data.get("builder"))
+                _add(sets, params, "total_acres", data.get("total_acres"), as_float=True)
             
             if sets:
                 params.append(property_id)
                 execute_update(f"UPDATE {table} SET {', '.join(sets)} WHERE id = %s", tuple(params))
             
-            # Images: replace all images (form sends flat list, we store all as 'project' category)
+            # Images: replace all images - handle both image_gallery (with categories) and flat images array
+            image_gallery = data.get("image_gallery") or []
             images = data.get("images") or []
+            
             try:
                 execute_update(f"DELETE FROM {img_table} WHERE property_id = %s", (property_id,))
             except Exception as img_del_err:
                 print(f"Warning: could not delete images for property {property_id}: {img_del_err}")
-            if images:
-                processed = process_image_urls(images, None)
-                for idx, url in enumerate(processed):
-                    if url:
-                        execute_update(
-                            f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
-                            (property_id, url, 'project', idx)
-                        )
+            
+            # Process gallery images if available (preferred format with categories)
+            if image_gallery:
+                try:
+                    for idx, gallery_item in enumerate(image_gallery):
+                        image_url = gallery_item.get("image_url")
+                        if image_url:
+                            # Process and normalize image URL
+                            processed_urls = process_image_urls([image_url], None)
+                            if processed_urls:
+                                image_category = gallery_item.get("category", "project")
+                                # Map frontend categories to DB categories
+                                category_map = {
+                                    "project": "project",
+                                    "floorplan": "floorplan",
+                                    "masterplan": "masterplan"
+                                }
+                                db_category = category_map.get(image_category, "project")
+                                
+                                execute_update(
+                                    f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
+                                    (property_id, processed_urls[0], db_category, idx)
+                                )
+                except Exception as img_err:
+                    print(f"Warning: could not update gallery images for property {property_id}: {img_err}")
+            
+            # Fallback to flat images list if gallery is empty
+            if not image_gallery and images:
+                try:
+                    processed = process_image_urls(images, None)
+                    for idx, url in enumerate(processed):
+                        if url:
+                            execute_update(
+                                f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
+                                (property_id, url, 'project', idx)
+                            )
+                except Exception as img_err:
+                    print(f"Warning: could not update images for property {property_id}: {img_err}")
             
             # Features: replace
             features = data.get("features") or data.get("amenities") or []

@@ -345,21 +345,27 @@ def register_stats_routes(app):
     @app.route("/api/admin/stats/page-visits", methods=["GET"])
     @require_admin_auth
     def get_page_visit_stats():
-        """Get page visit statistics (admin endpoint)"""
+        """Get page visit statistics with unique and authenticated visitors (admin endpoint)"""
         try:
             import json
             import re
             
-            # Get all page_view logs with metadata and description
+            # Get all page_view logs with metadata, description, ip_address, and user_email
             all_logs = execute_query("""
-                SELECT metadata, description 
+                SELECT metadata, description, ip_address, user_email 
                 FROM logs 
                 WHERE action = 'page_view'
+                ORDER BY created_at DESC
             """)
             
-            page_counts = {}
+            # Structure: {page_name: {'visits': count, 'unique_ips': set(), 'authenticated_emails': set()}}
+            page_stats = {}
+            
             for log in all_logs:
                 page = None
+                ip_address = log.get('ip_address')
+                user_email = log.get('user_email')
+                is_authenticated = bool(user_email and user_email.strip())
                 
                 # First, try to get page from metadata
                 try:
@@ -400,10 +406,35 @@ def register_stats_routes(app):
                 
                 # Use page name or default
                 page = page or 'Unknown Page'
-                page_counts[page] = page_counts.get(page, 0) + 1
+                
+                # Initialize page stats if not exists
+                if page not in page_stats:
+                    page_stats[page] = {
+                        'visits': 0,
+                        'unique_ips': set(),
+                        'authenticated_emails': set()
+                    }
+                
+                # Increment total visits
+                page_stats[page]['visits'] += 1
+                
+                # Track unique IP addresses
+                if ip_address and ip_address.strip():
+                    page_stats[page]['unique_ips'].add(ip_address.strip())
+                
+                # Track authenticated visitors
+                if is_authenticated:
+                    page_stats[page]['authenticated_emails'].add(user_email.strip())
             
-            # Convert to list and sort by visits
-            page_visits = [{'page': page, 'visits': count} for page, count in sorted(page_counts.items(), key=lambda x: x[1], reverse=True)[:50]]
+            # Convert to list format with all metrics
+            page_visits = []
+            for page, stats in sorted(page_stats.items(), key=lambda x: x[1]['visits'], reverse=True)[:50]:
+                page_visits.append({
+                    'page': page,
+                    'visits': stats['visits'],
+                    'unique_visitors': len(stats['unique_ips']),
+                    'authenticated_visitors': len(stats['authenticated_emails'])
+                })
             
             return jsonify({
                 'page_visits': page_visits or []
