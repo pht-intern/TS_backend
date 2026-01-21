@@ -1,7 +1,7 @@
 """
 Metrics routes
 """
-from flask import request, jsonify
+from flask import request, jsonify, make_response
 import traceback
 from database import execute_update
 
@@ -9,16 +9,26 @@ from database import execute_update
 def register_metrics_routes(app):
     """Register metrics routes"""
     
-    @app.route("/api/admin/metrics/collect-app", methods=["POST"])
+    @app.route("/api/admin/metrics/collect-app", methods=["POST", "OPTIONS"])
     def collect_app_metrics():
         """Collect and store frontend application-specific metrics (CPU, RAM, Bandwidth)"""
+        # Handle OPTIONS request for CORS preflight
+        if request.method == "OPTIONS":
+            response = make_response()
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+            return response
+        
         try:
             data = request.get_json()
             if not data:
-                return jsonify({
+                response = jsonify({
                     "success": False,
                     "error": "No data provided"
-                }), 400
+                })
+                response.headers['Access-Control-Allow-Origin'] = '*'
+                return response, 400
             
             # Extract metrics from request
             cpu_usage = float(data.get('cpu_usage', 0))
@@ -71,15 +81,19 @@ def register_metrics_routes(app):
                 bandwidth_in_mb, bandwidth_out_mb, bandwidth_total_mb
             ))
             
-            return jsonify({
+            response = jsonify({
                 "success": True,
                 "message": "Metrics collected successfully"
             })
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            return response
         except Exception as e:
             error_msg = str(e)
             print(f"Error collecting app metrics: {error_msg}")
             traceback.print_exc()
-            return jsonify({
+            response = jsonify({
                 "success": False,
                 "error": f"Error collecting metrics: {error_msg}"
-            }), 500
+            })
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            return response, 500

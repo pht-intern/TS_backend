@@ -1,10 +1,11 @@
 """
 Statistics routes
 """
-from flask import jsonify
+from flask import jsonify, request, make_response
 from datetime import datetime
 import traceback
 import json
+import re
 from database import execute_query
 from models import PropertyStatus
 from schemas import PropertyStatsSchema, FrontendStatsSchema, DashboardStatsSchema
@@ -14,9 +15,17 @@ from utils.helpers import abort_with_message, require_admin_auth
 def register_stats_routes(app):
     """Register statistics routes"""
     
-    @app.route("/api/stats/properties", methods=["GET"])
+    @app.route("/api/stats/properties", methods=["GET", "OPTIONS"])
     def get_property_stats():
         """Get property statistics (optimized with single query)"""
+        # Handle OPTIONS request for CORS preflight
+        if request.method == "OPTIONS":
+            response = make_response()
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+            return response
+        
         try:
             # Query both residential_properties and plot_properties
             query = f"""
@@ -74,16 +83,53 @@ def register_stats_routes(app):
             
             result_dict = result.dict()
             
-            return jsonify(result_dict)
+            # Support JSONP if callback parameter is provided
+            callback = request.args.get('callback')
+            if callback:
+                # Validate callback name to prevent XSS
+                if re.match(r'^[a-zA-Z_$][a-zA-Z0-9_$]*$', callback):
+                    response = make_response(f"{callback}({json.dumps(result_dict)});")
+                    response.headers['Content-Type'] = 'application/javascript'
+                    response.headers['Access-Control-Allow-Origin'] = '*'
+                    return response
+                else:
+                    # Invalid callback name, return regular JSON
+                    response = jsonify({'error': 'Invalid callback parameter'})
+                    response.headers['Access-Control-Allow-Origin'] = '*'
+                    return response, 400
+            
+            response = jsonify(result_dict)
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            return response
         except Exception as e:
             print(f"Error fetching property stats: {str(e)}")
             traceback.print_exc()
             result = PropertyStatsSchema(total=0, for_sale=0, for_rent=0, by_type={}, featured=0)
-            return jsonify(result.dict())
+            result_dict = result.dict()
+            
+            # Support JSONP in error case too
+            callback = request.args.get('callback')
+            if callback and re.match(r'^[a-zA-Z_$][a-zA-Z0-9_$]*$', callback):
+                response = make_response(f"{callback}({json.dumps(result_dict)});")
+                response.headers['Content-Type'] = 'application/javascript'
+                response.headers['Access-Control-Allow-Origin'] = '*'
+                return response
+            
+            response = jsonify(result_dict)
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            return response
     
-    @app.route("/api/stats/frontend", methods=["GET"])
+    @app.route("/api/stats/frontend", methods=["GET", "OPTIONS"])
     def get_frontend_stats():
         """Get frontend statistics for homepage"""
+        # Handle OPTIONS request for CORS preflight
+        if request.method == "OPTIONS":
+            response = make_response()
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+            return response
+        
         try:
             # Optimized: Use single query with conditional aggregation where possible
             def get_count(query):
@@ -115,15 +161,43 @@ def register_stats_routes(app):
             
             result_dict = result.dict()
             
-            return jsonify(result_dict)
+            # Support JSONP if callback parameter is provided
+            callback = request.args.get('callback')
+            if callback:
+                # Validate callback name to prevent XSS
+                if re.match(r'^[a-zA-Z_$][a-zA-Z0-9_$]*$', callback):
+                    response = make_response(f"{callback}({json.dumps(result_dict)});")
+                    response.headers['Content-Type'] = 'application/javascript'
+                    response.headers['Access-Control-Allow-Origin'] = '*'
+                    return response
+                else:
+                    # Invalid callback name, return regular JSON
+                    return jsonify({'error': 'Invalid callback parameter'}), 400
+            
+            response = jsonify(result_dict)
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            return response
         except Exception as e:
             print(f"Error in get_frontend_stats: {str(e)}")
+            traceback.print_exc()
             # Calculate years of experience dynamically even in error case
             current_year = datetime.now().year
             base_year = 2010
             years_experience = current_year - base_year
             result = FrontendStatsSchema(properties_listed=0, happy_clients=45, years_experience=years_experience, deals_closed=20)
-            return jsonify(result.dict())
+            result_dict = result.dict()
+            
+            # Support JSONP in error case too
+            callback = request.args.get('callback')
+            if callback and re.match(r'^[a-zA-Z_$][a-zA-Z0-9_$]*$', callback):
+                response = make_response(f"{callback}({json.dumps(result_dict)});")
+                response.headers['Content-Type'] = 'application/javascript'
+                response.headers['Access-Control-Allow-Origin'] = '*'
+                return response
+            
+            response = jsonify(result_dict)
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            return response
     
     @app.route("/api/admin/stats/dashboard", methods=["GET"])
     @require_admin_auth

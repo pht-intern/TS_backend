@@ -1,7 +1,7 @@
 """
 Properties routes
 """
-from flask import request, jsonify, current_app
+from flask import request, jsonify, current_app, make_response
 from datetime import datetime
 from decimal import Decimal
 import traceback
@@ -18,9 +18,16 @@ from config import IMAGES_DIR
 def register_properties_routes(app):
     """Register properties routes"""
     
-    @app.route("/api/properties", methods=["GET"])
+    @app.route("/api/properties", methods=["GET", "OPTIONS"])
     def get_properties_route():
         """Get all properties with filtering and pagination"""
+        # Handle OPTIONS request for CORS preflight
+        if request.method == "OPTIONS":
+            response = make_response()
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+            return response
         return get_properties()
     
     @app.route("/api/properties", methods=["POST"])
@@ -242,12 +249,16 @@ def register_properties_routes(app):
                 pages=calculate_pages(total, pagination.limit),
                 items=normalized_properties
             )
-            return jsonify(response.dict())
+            result = jsonify(response.dict())
+            result.headers['Access-Control-Allow-Origin'] = '*'
+            return result
         except Exception as e:
             error_msg = str(e)
             print(f"Error fetching properties: {error_msg}")
             traceback.print_exc()
-            return error_response(f"Error fetching properties: {error_msg}", 500)
+            error_resp, status_code = error_response(f"Error fetching properties: {error_msg}", 500)
+            error_resp.headers['Access-Control-Allow-Origin'] = '*'
+            return error_resp, status_code
     
     def create_property():
         """Create a new property (residential or plot) based on property_type"""
