@@ -346,14 +346,18 @@ def execute_update(query: str, params: tuple = None) -> int:
         sanitized_params = auto_sanitize_params(params) if params else None
         
         raw_conn = engine.raw_connection()
+        # Explicitly disable autocommit to ensure transaction control
+        raw_conn.autocommit(False)
         cursor = raw_conn.cursor()
         try:
             if sanitized_params:
                 cursor.execute(query, sanitized_params)
             else:
                 cursor.execute(query)
+            # Explicitly commit the transaction
             raw_conn.commit()
-            return cursor.rowcount
+            affected_rows = cursor.rowcount
+            return affected_rows
         except Exception as e:
             if raw_conn:
                 raw_conn.rollback()
@@ -412,12 +416,15 @@ def execute_insert(query: str, params: tuple = None) -> int:
         sanitized_params = auto_sanitize_params(params) if params else None
         
         raw_conn = engine.raw_connection()
+        # Explicitly disable autocommit to ensure transaction control
+        raw_conn.autocommit(False)
         cursor = raw_conn.cursor()
         try:
             if sanitized_params:
                 cursor.execute(query, sanitized_params)
             else:
                 cursor.execute(query)
+            # Explicitly commit the transaction
             raw_conn.commit()
             return cursor.lastrowid
         except Exception as e:
