@@ -795,26 +795,60 @@ def register_properties_routes(app):
     def delete_property(property_id: int):
         """Delete a property (residential or plot) - Production-safe implementation"""
         try:
-            # Check which table contains this property
+            current_app.logger.info(f"Attempting to delete property {property_id}")
+            
+            # Determine property category first
+            property_category = None
             residential_check = execute_query("SELECT id FROM residential_properties WHERE id = %s", (property_id,))
             if residential_check:
+                property_category = 'residential'
+                current_app.logger.info(f"Property {property_id} found in residential_properties")
+            else:
+                plot_check = execute_query("SELECT id FROM plot_properties WHERE id = %s", (property_id,))
+                if plot_check:
+                    property_category = 'plot'
+                    current_app.logger.info(f"Property {property_id} found in plot_properties")
+                else:
+                    current_app.logger.warning(f"Delete failed: Property {property_id} not found in any table")
+                    return error_response("Property not found", 404)
+            
+            # Delete related data first (property_features has no CASCADE, so must delete manually)
+            # Images will be deleted automatically via CASCADE foreign key
+            try:
+                deleted_features = execute_update(
+                    "DELETE FROM property_features WHERE property_category = %s AND property_id = %s",
+                    (property_category, property_id)
+                )
+                current_app.logger.info(f"Deleted {deleted_features} property_features for property {property_id}")
+            except Exception as fe:
+                current_app.logger.warning(f"Warning: Could not delete property_features for property {property_id}: {str(fe)}")
+                # Continue with property deletion even if features deletion fails
+            
+            # Delete the property itself
+            if property_category == 'residential':
                 result = execute_update("DELETE FROM residential_properties WHERE id = %s", (property_id,))
+                current_app.logger.info(f"DELETE query executed, affected rows: {result}")
                 if result == 0:
                     current_app.logger.warning(f"Delete failed: Property {property_id} not found in residential_properties")
                     return error_response("Property not found", 404)
                 current_app.logger.info(f"Property {property_id} deleted successfully from residential_properties")
-            else:
-                plot_check = execute_query("SELECT id FROM plot_properties WHERE id = %s", (property_id,))
-                if not plot_check:
-                    current_app.logger.warning(f"Delete failed: Property {property_id} not found in plot_properties")
-                    return error_response("Property not found", 404)
+            else:  # plot
                 result = execute_update("DELETE FROM plot_properties WHERE id = %s", (property_id,))
+                current_app.logger.info(f"DELETE query executed, affected rows: {result}")
                 if result == 0:
                     current_app.logger.warning(f"Delete failed: Property {property_id} not found in plot_properties")
                     return error_response("Property not found", 404)
                 current_app.logger.info(f"Property {property_id} deleted successfully from plot_properties")
             
+            # Verify deletion
+            verify_residential = execute_query("SELECT id FROM residential_properties WHERE id = %s", (property_id,))
+            verify_plot = execute_query("SELECT id FROM plot_properties WHERE id = %s", (property_id,))
+            if verify_residential or verify_plot:
+                current_app.logger.error(f"Property {property_id} still exists after deletion attempt!")
+                return error_response("Property deletion failed - property still exists", 500)
+            
             # Success - return 200 with success message
+            current_app.logger.info(f"Property {property_id} deletion verified successfully")
             return success_response("Property deleted successfully")
         except Exception as e:
             error_msg = f"Error deleting property {property_id}: {str(e)}"
