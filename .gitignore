@@ -1,6 +1,5 @@
 .env
 requirements.txt
-passenger_wsgi.py
 venv/
 __pycache__/
 restart.txt
