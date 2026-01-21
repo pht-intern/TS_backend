@@ -48,6 +48,7 @@ IMPORTANT_CITIES_BY_STATE = {
 
 def register_cities_routes(app):
     """Register cities routes"""
+    print("Registering cities routes...")
     
     @app.route("/api/cities", methods=["GET"])
     def get_active_cities():
@@ -334,3 +335,10 @@ def register_cities_routes(app):
                     response.headers['Content-Type'] = 'application/javascript'
                     return response
             abort_with_message(500, f"Error fetching localities: {str(e)}")
+    
+    # Confirm routes are registered
+    print("✓ Cities routes registered successfully")
+    print("  - GET /api/cities")
+    print("  - GET /api/admin/cities")
+    print("  - GET,POST /api/admin/cities/bulk")
+    print("  - GET /api/localities")
