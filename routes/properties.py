@@ -188,7 +188,7 @@ def register_properties_routes(app):
                                 SELECT image_url 
                                 FROM residential_property_images
                                 WHERE property_id = %s
-                                ORDER BY image_order ASC, created_at ASC 
+                                ORDER BY created_at ASC, image_order ASC 
                                 LIMIT 1
                             """
                         else:
@@ -196,13 +196,16 @@ def register_properties_routes(app):
                                 SELECT image_url 
                                 FROM plot_property_images
                                 WHERE property_id = %s
-                                ORDER BY image_order ASC, created_at ASC 
+                                ORDER BY created_at ASC, image_order ASC 
                                 LIMIT 1
                             """
                         
                         primary_images = execute_query(primary_image_query, (property_id,))
                         if primary_images and primary_images[0].get('image_url'):
-                            prop_dict['primary_image'] = normalize_image_url(primary_images[0]['image_url'])
+                            normalized_first_image = normalize_image_url(primary_images[0]['image_url'])
+                            prop_dict['primary_image'] = normalized_first_image
+                            # Populate images array with the first image for frontend display
+                            prop_dict['images'] = [{'image_url': normalized_first_image}]
                     except Exception as e:
                         # If image fetch fails, continue without images
                         print(f"Warning: Could not fetch images for property {property_id}: {str(e)}")
@@ -210,6 +213,9 @@ def register_properties_routes(app):
                 # Normalize existing primary_image if it exists (fallback - in case property table has primary_image field)
                 if 'primary_image' in prop_dict and prop_dict['primary_image']:
                     prop_dict['primary_image'] = normalize_image_url(prop_dict['primary_image'])
+                    # If images array is empty but primary_image exists, populate it
+                    if 'images' not in prop_dict or not prop_dict.get('images'):
+                        prop_dict['images'] = [{'image_url': prop_dict['primary_image']}]
                 
                 # Ensure images array exists
                 if 'images' not in prop_dict:
