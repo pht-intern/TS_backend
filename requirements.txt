@@ -41,3 +41,7 @@ python-dotenv>=1.0.0,<2.0.0
 # System Monitoring
 # psutil for system metrics (CPU, RAM, etc.) - Compatible with Python 3.11
 psutil>=5.9.0,<6.0.0
+
+# Google Maps API
+# googlemaps for Places API integration - Compatible with Python 3.11
+googlemaps>=4.10.0,<5.0.0

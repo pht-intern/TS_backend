@@ -1,305 +1,219 @@
 """
 City to Localities/Areas Mapping
-This file contains a comprehensive mapping of cities to their localities/areas.
-This data can be used as a fallback or primary source for locality dropdowns.
+This module fetches city localities dynamically from Google Maps Places API.
+Results are cached to minimize API calls and improve performance.
 """
+import os
+import json
+import time
+from pathlib import Path
+from typing import List, Dict, Optional
+from dotenv import load_dotenv
 
-# Mapping of cities to their localities/areas
-CITY_LOCALITIES = {
-    # Karnataka
-    'Bengaluru': [
-        'Whitefield', 'Marathahalli', 'Electronic City', 'HSR Layout', 'Koramangala',
-        'Indiranagar', 'Jayanagar', 'JP Nagar', 'BTM Layout', 'Bannerghatta Road',
-        'Hebbal', 'Yelahanka', 'Yeshwanthpur', 'Malleswaram', 'Rajajinagar',
-        'Vijayanagar', 'Basavanagudi', 'Banashankari', 'Uttarahalli', 'Jalahalli',
-        'Peenya', 'Nagarbhavi', 'Vidyaranyapura', 'RT Nagar', 'Frazer Town',
-        'Cox Town', 'Shivajinagar', 'MG Road', 'Brigade Road', 'Commercial Street',
-        'Richmond Town', 'Lavelle Road', 'Cunningham Road', 'Race Course Road',
-        'Domlur', 'Old Airport Road', 'Murugeshpalya', 'Kadubeesanahalli', 'Bellandur',
-        'Sarjapur Road', 'Outer Ring Road', 'KR Puram', 'Mahadevapura', 'CV Raman Nagar',
-        'Ramamurthy Nagar', 'Kaggadasapura', 'Banaswadi', 'Kalyan Nagar', 'HRBR Layout',
-        'Hennur', 'Thanisandra', 'Nagavara', 'Hebbal Kempapura', 'Gunjur',
-        'Varthur', 'Panathur', 'Kadugodi', 'Hoodi', 'ITPL', 'Whitefield Main Road'
-    ],
-    'Mysuru': [
-        'Vijayanagar', 'Kuvempunagar', 'Gokulam', 'Nazarbad', 'Saraswathipuram',
-        'Vishweshwarapuram', 'Yadavagiri', 'T K Layout', 'Bannimantap', 'Hunsur Road',
-        'Bogadi', 'Hinkal', 'Kuvempunagar Extension', 'JP Nagar', 'Vontikoppal',
-        'Lakshmipuram', 'Krishnamurthypuram', 'Mandi Mohalla', 'Devaraja Market',
-        'Chamarajapuram', 'Ashokapuram', 'Siddharthanagar', 'Vijayanagar 1st Stage',
-        'Vijayanagar 2nd Stage', 'Vijayanagar 3rd Stage', 'Vijayanagar 4th Stage'
-    ],
-    'Mangaluru': [
-        'Kadri', 'Bejai', 'Pandeshwar', 'Hampankatta', 'Kankanady',
-        'Bendoor', 'Falnir', 'Kodialbail', 'Bolar', 'Urwa',
-        'Kulur', 'Padil', 'Bondel', 'Kottara', 'Jeppu',
-        'Kadri Park', 'Light House Hill', 'Pumpwell', 'Kankanady', 'Attavar'
-    ],
-    'Hubballi': [
-        'Vidyanagar', 'Gokul Road', 'Deshpande Nagar', 'Keshwapur', 'Hubballi City',
-        'Old Hubballi', 'New Hubballi', 'Unkal', 'Bengeri', 'Dharwad Road',
-        'Airport Road', 'Gandhi Nagar', 'Keshwapur Extension', 'Keshwapur Main',
-        'Vidyanagar Extension', 'Gokul Road Extension'
-    ],
-    'Belagavi': [
-        'Camp', 'Khanapur Road', 'Tilakwadi', 'Shahapur', 'Fort Area',
-        'College Road', 'Gogte Circle', 'Rani Channamma Circle', 'Khasbag',
-        'Sadashiv Nagar', 'Ashok Nagar', 'Basaveshwar Nagar', 'Shivaji Nagar'
-    ],
-    
-    # Maharashtra
-    'Mumbai': [
-        'Andheri', 'Bandra', 'Powai', 'Juhu', 'Vile Parle', 'Goregaon',
-        'Malad', 'Kandivali', 'Borivali', 'Dahisar', 'Mira Road', 'Bhayandar',
-        'Chembur', 'Ghatkopar', 'Vikhroli', 'Bhandup', 'Mulund', 'Thane',
-        'Navi Mumbai', 'Kharghar', 'Panvel', 'Nerul', 'Vashi', 'Airoli',
-        'Kurla', 'Santacruz', 'Khar', 'Versova', 'Lokhandwala', 'Oshiwara',
-        'Jogeshwari', 'Goregaon East', 'Goregaon West', 'Malad East', 'Malad West',
-        'Kandivali East', 'Kandivali West', 'Borivali East', 'Borivali West',
-        'Dahisar East', 'Dahisar West', 'Mira Road East', 'Mira Road West',
-        'Bhayandar East', 'Bhayandar West', 'Chembur East', 'Chembur West',
-        'Ghatkopar East', 'Ghatkopar West', 'Vikhroli East', 'Vikhroli West',
-        'Bhandup East', 'Bhandup West', 'Mulund East', 'Mulund West',
-        'Thane West', 'Thane East', 'Airoli', 'Koparkhairane', 'Sanpada',
-        'Seawoods', 'Belapur', 'CBD Belapur', 'Kharghar Sector', 'Kamothe',
-        'Ulwe', 'Dronagiri', 'Kalamboli', 'Taloja', 'Kharghar'
-    ],
-    'Pune': [
-        'Hinjawadi', 'Wakad', 'Baner', 'Aundh', 'Kothrud', 'Karve Nagar',
-        'Deccan', 'FC Road', 'JM Road', 'Koregaon Park', 'Viman Nagar',
-        'Kalyani Nagar', 'Kharadi', 'Wagholi', 'Hadapsar', 'Magarpatta',
-        'Amanora', 'Hadapsar', 'Kondhwa', 'Wanowrie', 'Mohammedwadi',
-        'Katraj', 'Dhankawadi', 'Sinhagad Road', 'Bavdhan', 'Sus Road',
-        'Pashan', 'Baner Road', 'Balewadi', 'Hinjewadi Phase 1', 'Hinjewadi Phase 2',
-        'Hinjewadi Phase 3', 'Ravet', 'Tathawade', 'Chakan', 'Talegaon',
-        'Kharadi', 'Viman Nagar', 'Kalyani Nagar', 'Koregaon Park', 'Deccan Gymkhana',
-        'Shivajinagar', 'Camp', 'Sadashiv Peth', 'Shaniwar Peth', 'Kasba Peth',
-        'Bibwewadi', 'Sahakar Nagar', 'Warje', 'NIBM', 'Undri', 'Pisoli'
-    ],
-    'Nagpur': [
-        'Civil Lines', 'Dharampeth', 'Ramdaspeth', 'Shankar Nagar', 'Wardha Road',
-        'Amravati Road', 'Kamptee Road', 'Katol Road', 'Hingna Road', 'Butibori',
-        'Mihan', 'Khapri', 'Wardha Road', 'Amravati Road', 'Kamptee Road'
-    ],
-    'Nashik': [
-        'Gangapur Road', 'College Road', 'Satpur', 'Ambad', 'CIDCO',
-        'Nashik Road', 'Panchavati', 'Old Nashik', 'New Nashik', 'Trimbak Road'
-    ],
-    
-    # Tamil Nadu
-    'Chennai': [
-        'T Nagar', 'Anna Nagar', 'Adyar', 'Besant Nagar', 'Velachery',
-        'OMR', 'ECR', 'Porur', 'Poonamallee', 'Ambattur', 'Avadi',
-        'Tambaram', 'Chrompet', 'Pallavaram', 'Guindy', 'Saidapet',
-        'Mylapore', 'Nungambakkam', 'Kilpauk', 'Aminjikarai', 'Purasawalkam',
-        'Perambur', 'Vyasarpadi', 'Washermanpet', 'Tondiarpet', 'Royapuram',
-        'Egmore', 'Mount Road', 'Nandanam', 'Alwarpet', 'Boat Club',
-        'RA Puram', 'Mylapore', 'Triplicane', 'Chepauk', 'Marina Beach',
-        'Thiruvanmiyur', 'Kottivakkam', 'Palavakkam', 'Neelankarai', 'Sholinganallur',
-        'Perungudi', 'Thoraipakkam', 'Pallikaranai', 'Medavakkam', 'Kovilambakkam',
-        'Keelkattalai', 'Tambaram', 'Chrompet', 'Pallavaram', 'St. Thomas Mount',
-        'Guindy', 'Saidapet', 'Koyambedu', 'Anna Nagar East', 'Anna Nagar West',
-        'Anna Nagar', 'KK Nagar', 'Ashok Nagar', 'Vadapalani', 'Aminjikarai',
-        'Kilpauk', 'Chetpet', 'Nungambakkam', 'T Nagar', 'Mylapore',
-        'Alwarpet', 'Boat Club', 'RA Puram', 'Adyar', 'Besant Nagar'
-    ],
-    'Coimbatore': [
-        'RS Puram', 'Saibaba Colony', 'Race Course', 'Gandhipuram', 'Peelamedu',
-        'Saravanampatti', 'Sitra', 'Kovaipudur', 'Singanallur', 'Gandhipuram',
-        'Town Hall', 'Ukkadam', 'Ramanathapuram', 'Sundarapuram', 'Sulur',
-        'Karamadai', 'Mettupalayam', 'Pollachi', 'Udumalpet'
-    ],
-    'Madurai': [
-        'Anna Nagar', 'KK Nagar', 'Villapuram', 'Tallakulam', 'Goripalayam',
-        'Simmakkal', 'Periyar', 'Teppakulam', 'Thirumangalam', 'Koodal Nagar'
-    ],
-    
-    # Telangana
-    'Hyderabad': [
-        'Gachibowli', 'Hitech City', 'Madhapur', 'Kondapur', 'Jubilee Hills',
-        'Banjara Hills', 'Himayatnagar', 'Abids', 'Secunderabad', 'Begumpet',
-        'Ameerpet', 'Kukatpally', 'Miyapur', 'Alwal', 'Bachupally',
-        'Nizampet', 'Qutubullapur', 'Bachupally', 'Kompally', 'Suchitra',
-        'Boduppal', 'Uppal', 'Nagole', 'LB Nagar', 'Dilsukhnagar',
-        'Malakpet', 'Charminar', 'Old City', 'Mehdipatnam', 'Tolichowki',
-        'Rajendra Nagar', 'Attapur', 'Narsingi', 'Manikonda', 'Nanakramguda',
-        'Financial District', 'Nanakramguda', 'Kokapet', 'Tellapur', 'Narsingi',
-        'Manikonda', 'Gachibowli', 'Hitech City', 'Madhapur', 'Kondapur',
-        'Jubilee Hills', 'Banjara Hills', 'Himayatnagar', 'Abids', 'Secunderabad',
-        'Begumpet', 'Ameerpet', 'Kukatpally', 'Miyapur', 'Alwal'
-    ],
-    'Warangal': [
-        'Hanamkonda', 'Kazipet', 'Subedari', 'Enumamula', 'Narsampet'
-    ],
-    
-    # Delhi NCR
-    'New Delhi': [
-        'Connaught Place', 'Karol Bagh', 'Rajendra Place', 'Punjabi Bagh',
-        'Paschim Vihar', 'Janakpuri', 'Dwarka', 'Rohini', 'Pitampura',
-        'Model Town', 'GTB Nagar', 'Kamla Nagar', 'Hudson Lane', 'Kingsway Camp',
-        'Civil Lines', 'Kashmere Gate', 'Old Delhi', 'Chandni Chowk', 'Daryaganj',
-        'ITO', 'Mandir Marg', 'Patel Nagar', 'Rajouri Garden', 'Vikaspuri',
-        'Uttam Nagar', 'Nangloi', 'Najafgarh', 'Dwarka Sector', 'Rohini Sector',
-        'Pitampura', 'Model Town', 'GTB Nagar', 'Kamla Nagar', 'Hudson Lane'
-    ],
-    'Delhi': [
-        'Connaught Place', 'Karol Bagh', 'Rajendra Place', 'Punjabi Bagh',
-        'Paschim Vihar', 'Janakpuri', 'Dwarka', 'Rohini', 'Pitampura',
-        'Model Town', 'GTB Nagar', 'Kamla Nagar', 'Hudson Lane', 'Kingsway Camp',
-        'Civil Lines', 'Kashmere Gate', 'Old Delhi', 'Chandni Chowk', 'Daryaganj',
-        'ITO', 'Mandir Marg', 'Patel Nagar', 'Rajouri Garden', 'Vikaspuri',
-        'Uttam Nagar', 'Nangloi', 'Najafgarh', 'Dwarka Sector', 'Rohini Sector'
-    ],
-    'Gurgaon': [
-        'DLF Phase 1', 'DLF Phase 2', 'DLF Phase 3', 'DLF Phase 4', 'DLF Phase 5',
-        'Sector 14', 'Sector 15', 'Sector 17', 'Sector 18', 'Sector 22',
-        'Sector 23', 'Sector 29', 'Sector 31', 'Sector 43', 'Sector 44',
-        'Sector 45', 'Sector 46', 'Sector 47', 'Sector 48', 'Sector 49',
-        'Sector 50', 'Sector 51', 'Sector 52', 'Sector 53', 'Sector 54',
-        'Sector 55', 'Sector 56', 'Sector 57', 'Sector 58', 'Sector 59',
-        'Sector 60', 'Sector 61', 'Sector 62', 'Sector 63', 'Sector 64',
-        'Sector 65', 'Sector 66', 'Sector 67', 'Sector 68', 'Sector 69',
-        'Sector 70', 'Sector 71', 'Sector 72', 'Sector 73', 'Sector 74',
-        'Sector 75', 'Sector 76', 'Sector 77', 'Sector 78', 'Sector 79',
-        'Sector 80', 'Sector 81', 'Sector 82', 'Sector 83', 'Sector 84',
-        'Sector 85', 'Sector 86', 'Sector 87', 'Sector 88', 'Sector 89',
-        'Sector 90', 'Sector 91', 'Sector 92', 'Sector 93', 'Sector 94',
-        'Sector 95', 'Sector 96', 'Sector 97', 'Sector 98', 'Sector 99',
-        'Sector 100', 'Sector 101', 'Sector 102', 'Sector 103', 'Sector 104',
-        'Sector 105', 'Sector 106', 'Sector 107', 'Sector 108', 'Sector 109',
-        'Sector 110', 'Sector 111', 'Sector 112', 'Sector 113', 'Sector 114',
-        'Sector 115', 'MG Road', 'Old Gurgaon', 'New Gurgaon', 'Gurgaon City',
-        'Palam Vihar', 'Sushant Lok', 'DLF City', 'Sohna Road', 'Golf Course Road',
-        'Golf Course Extension Road', 'Southern Peripheral Road', 'Northern Peripheral Road',
-        'Dwarka Expressway', 'NH-8', 'Sohna', 'Faridabad Road', 'Pataudi Road'
-    ],
-    'Gurugram': [
-        'DLF Phase 1', 'DLF Phase 2', 'DLF Phase 3', 'DLF Phase 4', 'DLF Phase 5',
-        'Sector 14', 'Sector 15', 'Sector 17', 'Sector 18', 'Sector 22',
-        'Sector 23', 'Sector 29', 'Sector 31', 'Sector 43', 'Sector 44',
-        'Sector 45', 'Sector 46', 'Sector 47', 'Sector 48', 'Sector 49',
-        'Sector 50', 'Sector 51', 'Sector 52', 'Sector 53', 'Sector 54',
-        'Sector 55', 'Sector 56', 'Sector 57', 'Sector 58', 'Sector 59',
-        'Sector 60', 'Sector 61', 'Sector 62', 'Sector 63', 'Sector 64',
-        'Sector 65', 'Sector 66', 'Sector 67', 'Sector 68', 'Sector 69',
-        'Sector 70', 'Sector 71', 'Sector 72', 'Sector 73', 'Sector 74',
-        'Sector 75', 'Sector 76', 'Sector 77', 'Sector 78', 'Sector 79',
-        'Sector 80', 'Sector 81', 'Sector 82', 'Sector 83', 'Sector 84',
-        'Sector 85', 'Sector 86', 'Sector 87', 'Sector 88', 'Sector 89',
-        'Sector 90', 'Sector 91', 'Sector 92', 'Sector 93', 'Sector 94',
-        'Sector 95', 'Sector 96', 'Sector 97', 'Sector 98', 'Sector 99',
-        'Sector 100', 'Sector 101', 'Sector 102', 'Sector 103', 'Sector 104',
-        'Sector 105', 'Sector 106', 'Sector 107', 'Sector 108', 'Sector 109',
-        'Sector 110', 'Sector 111', 'Sector 112', 'Sector 113', 'Sector 114',
-        'Sector 115', 'MG Road', 'Old Gurgaon', 'New Gurgaon', 'Gurgaon City',
-        'Palam Vihar', 'Sushant Lok', 'DLF City', 'Sohna Road', 'Golf Course Road',
-        'Golf Course Extension Road', 'Southern Peripheral Road', 'Northern Peripheral Road',
-        'Dwarka Expressway', 'NH-8', 'Sohna', 'Faridabad Road', 'Pataudi Road'
-    ],
-    'Noida': [
-        'Sector 1', 'Sector 2', 'Sector 3', 'Sector 4', 'Sector 5',
-        'Sector 6', 'Sector 7', 'Sector 8', 'Sector 9', 'Sector 10',
-        'Sector 11', 'Sector 12', 'Sector 13', 'Sector 14', 'Sector 15',
-        'Sector 16', 'Sector 17', 'Sector 18', 'Sector 19', 'Sector 20',
-        'Sector 21', 'Sector 22', 'Sector 23', 'Sector 24', 'Sector 25',
-        'Sector 26', 'Sector 27', 'Sector 28', 'Sector 29', 'Sector 30',
-        'Sector 31', 'Sector 32', 'Sector 33', 'Sector 34', 'Sector 35',
-        'Sector 36', 'Sector 37', 'Sector 38', 'Sector 39', 'Sector 40',
-        'Sector 41', 'Sector 42', 'Sector 43', 'Sector 44', 'Sector 45',
-        'Sector 46', 'Sector 47', 'Sector 48', 'Sector 49', 'Sector 50',
-        'Sector 51', 'Sector 52', 'Sector 53', 'Sector 54', 'Sector 55',
-        'Sector 56', 'Sector 57', 'Sector 58', 'Sector 59', 'Sector 60',
-        'Sector 61', 'Sector 62', 'Sector 63', 'Sector 64', 'Sector 65',
-        'Sector 66', 'Sector 67', 'Sector 68', 'Sector 69', 'Sector 70',
-        'Sector 71', 'Sector 72', 'Sector 73', 'Sector 74', 'Sector 75',
-        'Sector 76', 'Sector 77', 'Sector 78', 'Sector 79', 'Sector 80',
-        'Sector 81', 'Sector 82', 'Sector 83', 'Sector 84', 'Sector 85',
-        'Sector 86', 'Sector 87', 'Sector 88', 'Sector 89', 'Sector 90',
-        'Sector 91', 'Sector 92', 'Sector 93', 'Sector 94', 'Sector 95',
-        'Sector 96', 'Sector 97', 'Sector 98', 'Sector 99', 'Sector 100',
-        'Sector 101', 'Sector 102', 'Sector 103', 'Sector 104', 'Sector 105',
-        'Sector 106', 'Sector 107', 'Sector 108', 'Sector 109', 'Sector 110',
-        'Sector 111', 'Sector 112', 'Sector 113', 'Sector 114', 'Sector 115',
-        'Sector 116', 'Sector 117', 'Sector 118', 'Sector 119', 'Sector 120',
-        'Sector 121', 'Sector 122', 'Sector 123', 'Sector 124', 'Sector 125',
-        'Sector 126', 'Sector 127', 'Sector 128', 'Sector 129', 'Sector 130',
-        'Sector 131', 'Sector 132', 'Sector 133', 'Sector 134', 'Sector 135',
-        'Sector 136', 'Sector 137', 'Sector 138', 'Sector 139', 'Sector 140',
-        'Sector 141', 'Sector 142', 'Sector 143', 'Sector 144', 'Sector 145',
-        'Sector 146', 'Sector 147', 'Sector 148', 'Sector 149', 'Sector 150',
-        'Sector 151', 'Sector 152', 'Sector 153', 'Sector 154', 'Sector 155',
-        'Sector 156', 'Sector 157', 'Sector 158', 'Sector 159', 'Sector 160',
-        'Sector 161', 'Sector 162', 'Sector 163', 'Sector 164', 'Sector 165',
-        'Sector 166', 'Sector 167', 'Sector 168', 'Sector 169', 'Sector 170',
-        'Sector 171', 'Sector 172', 'Sector 173', 'Sector 174', 'Sector 175',
-        'Greater Noida', 'Noida Extension', 'Noida City Centre', 'Noida Sector 18',
-        'Noida Sector 62', 'Noida Sector 137', 'Noida Sector 143', 'Noida Sector 150',
-        'Noida Sector 168', 'Noida Sector 76', 'Noida Sector 77', 'Noida Sector 78'
-    ],
-    
-    # Gujarat
-    'Ahmedabad': [
-        'Satellite', 'Bopal', 'Bodakdev', 'Prahlad Nagar', 'Vastrapur',
-        'Gurukul', 'Memnagar', 'Navrangpura', 'CG Road', 'SG Highway',
-        'Science City', 'Thaltej', 'Shilaj', 'Bavla', 'Sanand',
-        'Gandhinagar', 'Sarkhej', 'Jodhpur', 'Vejalpur', 'Ghatlodia',
-        'Naranpura', 'Nava Vadaj', 'Sola', 'Sarkhej', 'Bopal',
-        'Bodakdev', 'Prahlad Nagar', 'Vastrapur', 'Gurukul', 'Memnagar'
-    ],
-    'Surat': [
-        'Adajan', 'Athwa', 'Piplod', 'Vesu', 'Pal',
-        'Varachha', 'Katargam', 'Udhna', 'Sachin', 'Dumas',
-        'Magob', 'Hazira', 'Bamroli', 'Palanpur', 'Bardoli'
-    ],
-    'Vadodara': [
-        'Alkapuri', 'Fatehgunj', 'Sayajigunj', 'Akota', 'Makarpura',
-        'Gotri', 'Waghodia', 'Harni', 'Karelibaug', 'Tandalja'
-    ],
-    
-    # West Bengal
-    'Kolkata': [
-        'Salt Lake', 'New Town', 'Rajarhat', 'Howrah', 'Dum Dum',
-        'Barasat', 'Kalyani', 'Bidhannagar', 'Behala', 'Alipore',
-        'Park Street', 'Esplanade', 'BBD Bagh', 'Dalhousie', 'Chowringhee',
-        'Tollygunge', 'Garia', 'Jadavpur', 'Santoshpur', 'Bansdroni',
-        'Narendrapur', 'Sonarpur', 'Baruipur', 'Diamond Harbour', 'Kakdwip'
-    ],
-    
-    # Rajasthan
-    'Jaipur': [
-        'Malviya Nagar', 'C Scheme', 'Bani Park', 'Vaishali Nagar', 'Mansarovar',
-        'Vidhyadhar Nagar', 'Sitapura', 'Mahapura', 'Ajmer Road', 'Tonk Road',
-        'Sanganer', 'Amer', 'Jhotwara', 'Raja Park', 'Pink City',
-        'Walled City', 'MI Road', 'Ajmeri Gate', 'Chandpole', 'Hawa Mahal'
-    ],
-    'Jodhpur': [
-        'Basni', 'Ratanada', 'Shastri Nagar', 'Shastri Circle', 'Umaid Bhawan',
-        'Pal Road', 'Mandore', 'Bilara', 'Phalodi', 'Osian'
-    ],
-    
-    # Andhra Pradesh
-    'Visakhapatnam': [
-        'Dwaraka Nagar', 'MVP Colony', 'Seethammadhara', 'Madhurawada', 'Gajuwaka',
-        'Maddilapalem', 'Akkayyapalem', 'Lawson Bay Colony', 'Beach Road', 'Rushikonda'
-    ],
-    'Vijayawada': [
-        'Benz Circle', 'MG Road', 'Eluru Road', 'Gunadala', 'Patamata',
-        'Nidamanuru', 'Poranki', 'Kanuru', 'Bhavanipuram', 'Auto Nagar'
-    ],
-    
-    # Kerala
-    'Kochi': [
-        'Marine Drive', 'Fort Kochi', 'Mattancherry', 'Ernakulam', 'Edapally',
-        'Kakkanad', 'Infopark', 'Smart City', 'Vyttila', 'Palarivattom',
-        'Kaloor', 'MG Road', 'Banerji Road', 'Chittoor Road', 'Panampilly Nagar'
-    ],
-    
-    # Add more cities as needed
-}
+# Load environment variables
+from config import PROJECT_ROOT, ENV_FILE
+if ENV_FILE.exists():
+    load_dotenv(dotenv_path=ENV_FILE)
+else:
+    load_dotenv()
 
-def get_localities_for_city(city_name):
+try:
+    import googlemaps
+    GOOGLEMAPS_AVAILABLE = True
+except ImportError:
+    GOOGLEMAPS_AVAILABLE = False
+    print("WARNING: googlemaps library not installed. Install it with: pip install googlemaps")
+
+# Google Maps API key from environment
+GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
+
+# Initialize Google Maps client if API key is available
+gmaps_client = None
+if GOOGLEMAPS_AVAILABLE and GOOGLE_MAPS_API_KEY:
+    try:
+        gmaps_client = googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
+        print("✓ Google Maps API client initialized successfully")
+    except Exception as e:
+        print(f"WARNING: Failed to initialize Google Maps client: {str(e)}")
+        gmaps_client = None
+elif not GOOGLE_MAPS_API_KEY:
+    print("WARNING: GOOGLE_MAPS_API_KEY not found in environment variables. Google Maps API will not be available.")
+
+# Cache configuration
+CACHE_DIR = Path(PROJECT_ROOT) / "backend" / "data" / "cache"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_FILE = CACHE_DIR / "city_localities_cache.json"
+CACHE_EXPIRY_DAYS = 30  # Cache results for 30 days
+
+# In-memory cache for faster access
+_memory_cache: Dict[str, Dict] = {}
+
+def load_cache() -> Dict:
+    """Load cache from file if it exists and is not expired"""
+    global _memory_cache
+    
+    if not CACHE_FILE.exists():
+        return {}
+    
+    try:
+        with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+            cache_data = json.load(f)
+        
+        # Filter out expired entries
+        current_time = time.time()
+        valid_cache = {}
+        for city, data in cache_data.items():
+            cached_time = data.get('cached_at', 0)
+            if current_time - cached_time < (CACHE_EXPIRY_DAYS * 24 * 60 * 60):
+                valid_cache[city] = data
+        
+        _memory_cache = valid_cache
+        return valid_cache
+    except Exception as e:
+        print(f"Error loading cache: {str(e)}")
+        return {}
+
+def save_cache(cache_data: Dict):
+    """Save cache to file"""
+    try:
+        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cache_data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"Error saving cache: {str(e)}")
+
+def fetch_localities_from_google_maps(city_name: str) -> List[str]:
+    """
+    Fetch localities/neighborhoods for a city using Google Maps Places API.
+    
+    Args:
+        city_name (str): Name of the city
+    
+    Returns:
+        List[str]: List of locality names
+    """
+    if not gmaps_client:
+        print(f"[Google Maps] API not available for city '{city_name}'")
+        return []
+    
+    localities = []
+    
+    try:
+        # Step 1: Find the city using Text Search
+        city_query = f"{city_name}, India"
+        print(f"[Google Maps] Searching for city: {city_query}")
+        
+        places_result = gmaps_client.places(query=city_query, type='locality')
+        
+        if not places_result.get('results'):
+            # Try without "India" suffix
+            places_result = gmaps_client.places(query=city_name, type='locality')
+        
+        if not places_result.get('results'):
+            print(f"[Google Maps] City '{city_name}' not found")
+            return []
+        
+        # Get the first result (most relevant city)
+        city_place = places_result['results'][0]
+        city_location = city_place.get('geometry', {}).get('location', {})
+        
+        if not city_location:
+            print(f"[Google Maps] No location found for city '{city_name}'")
+            return []
+        
+        lat = city_location.get('lat')
+        lng = city_location.get('lng')
+        
+        print(f"[Google Maps] Found city '{city_name}' at coordinates: {lat}, {lng}")
+        
+        # Step 2: Search for neighborhoods/sublocalities using Nearby Search
+        # Search for different types of places that represent localities
+        place_types = ['neighborhood', 'sublocality', 'sublocality_level_1', 'sublocality_level_2']
+        
+        all_places = set()
+        
+        for place_type in place_types:
+            try:
+                # Nearby search for neighborhoods
+                nearby_result = gmaps_client.places_nearby(
+                    location=(lat, lng),
+                    radius=20000,  # 20km radius
+                    type=place_type
+                )
+                
+                if nearby_result.get('results'):
+                    for place in nearby_result.get('results', []):
+                        place_name = place.get('name', '').strip()
+                        if place_name and len(place_name) > 2:
+                            all_places.add(place_name)
+                
+                # Also try Text Search for neighborhoods in the city
+                text_query = f"neighborhoods in {city_name}"
+                text_result = gmaps_client.places(query=text_query)
+                
+                if text_result.get('results'):
+                    for place in text_result.get('results', []):
+                        place_name = place.get('name', '').strip()
+                        if place_name and len(place_name) > 2:
+                            all_places.add(place_name)
+                
+                # Small delay to respect rate limits
+                time.sleep(0.1)
+                
+            except Exception as e:
+                print(f"[Google Maps] Error searching for {place_type} in {city_name}: {str(e)}")
+                continue
+        
+        # Step 3: Use Autocomplete to get more locality suggestions
+        try:
+            autocomplete_result = gmaps_client.places_autocomplete(
+                input_text=f"{city_name} ",
+                types='(cities)',
+                components={'country': 'in'}  # Restrict to India
+            )
+            
+            # Also search for specific areas/neighborhoods
+            for suggestion in autocomplete_result[:10]:  # Limit to first 10
+                description = suggestion.get('description', '')
+                # Extract locality names from descriptions like "Locality, City, State, India"
+                parts = description.split(',')
+                if len(parts) > 0:
+                    locality_name = parts[0].strip()
+                    if locality_name and locality_name.lower() != city_name.lower():
+                        all_places.add(locality_name)
+        except Exception as e:
+            print(f"[Google Maps] Error in autocomplete for {city_name}: {str(e)}")
+        
+        # Step 4: Use Place Details to get address components
+        try:
+            place_id = city_place.get('place_id')
+            if place_id:
+                place_details = gmaps_client.place(place_id=place_id, fields=['address_component'])
+                
+                address_components = place_details.get('result', {}).get('address_components', [])
+                for component in address_components:
+                    types = component.get('types', [])
+                    if 'sublocality' in types or 'neighborhood' in types or 'sublocality_level_1' in types:
+                        name = component.get('long_name', '').strip()
+                        if name:
+                            all_places.add(name)
+        except Exception as e:
+            print(f"[Google Maps] Error getting place details for {city_name}: {str(e)}")
+        
+        localities = sorted(list(all_places))
+        print(f"[Google Maps] Found {len(localities)} localities for '{city_name}'")
+        
+        return localities
+        
+    except Exception as e:
+        print(f"[Google Maps] Error fetching localities for '{city_name}': {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+def get_localities_for_city(city_name: str) -> List[str]:
     """
     Get localities for a given city name.
+    First checks cache, then Google Maps API if needed.
     Returns a list of localities or empty list if city not found.
     
     Args:
@@ -311,43 +225,86 @@ def get_localities_for_city(city_name):
     if not city_name:
         return []
     
-    # Normalize city name (trim whitespace)
+    # Normalize city name (trim whitespace, lowercase for cache key)
     city_normalized = city_name.strip()
+    city_key = city_normalized.lower()
     
-    # Debug: Print available city keys for troubleshooting
-    available_cities = list(CITY_LOCALITIES.keys())
+    # Load cache if memory cache is empty
+    if not _memory_cache:
+        load_cache()
     
-    # Try exact match first (case-sensitive)
-    if city_normalized in CITY_LOCALITIES:
-        print(f"[City Mapping] Exact match found for '{city_normalized}'")
-        return CITY_LOCALITIES[city_normalized].copy()
+    # Check cache first
+    if city_key in _memory_cache:
+        cached_data = _memory_cache[city_key]
+        localities = cached_data.get('localities', [])
+        print(f"[City Mapping] Cache hit for '{city_normalized}': {len(localities)} localities")
+        return localities.copy()
     
-    # Try case-insensitive exact match
-    for city_key, localities in CITY_LOCALITIES.items():
-        if city_key.lower() == city_normalized.lower():
-            print(f"[City Mapping] Case-insensitive match found: '{city_key}' for '{city_normalized}'")
-            return localities.copy()
+    # Cache miss - fetch from Google Maps API
+    print(f"[City Mapping] Cache miss for '{city_normalized}', fetching from Google Maps...")
+    localities = fetch_localities_from_google_maps(city_normalized)
     
-    # Try partial match (in case city name has variations like "Bengaluru" vs "Bangalore")
-    city_lower = city_normalized.lower()
-    for city_key, localities in CITY_LOCALITIES.items():
-        city_key_lower = city_key.lower()
-        # Check if one contains the other (for variations)
-        if city_lower in city_key_lower or city_key_lower in city_lower:
-            # Make sure it's a meaningful match (not just a single character)
-            if len(city_lower) > 3 and len(city_key_lower) > 3:
-                print(f"[City Mapping] Partial match found: '{city_key}' for '{city_normalized}'")
-                return localities.copy()
+    # Store in cache
+    if localities:
+        _memory_cache[city_key] = {
+            'localities': localities,
+            'cached_at': time.time(),
+            'city_name': city_normalized
+        }
+        save_cache(_memory_cache)
+        print(f"[City Mapping] Cached {len(localities)} localities for '{city_normalized}'")
+    else:
+        # Cache empty result to avoid repeated API calls for cities with no results
+        _memory_cache[city_key] = {
+            'localities': [],
+            'cached_at': time.time(),
+            'city_name': city_normalized
+        }
+        save_cache(_memory_cache)
+        print(f"[City Mapping] No localities found for '{city_normalized}', cached empty result")
     
-    # No match found - log for debugging
-    print(f"[City Mapping] No match found for '{city_normalized}'. Available cities: {available_cities[:10]}...")
-    return []
+    return localities.copy()
 
-def get_all_cities():
+def get_all_cities() -> List[str]:
     """
-    Get all cities that have localities defined.
+    Get all cities that have cached localities.
+    Note: This only returns cities that have been queried and cached.
+    For a complete list of cities, use the database or cities API endpoint.
     
     Returns:
-        list: List of city names
+        list: List of city names that have cached data
     """
-    return list(CITY_LOCALITIES.keys())
+    if not _memory_cache:
+        load_cache()
+    
+    cities = []
+    for city_key, data in _memory_cache.items():
+        city_name = data.get('city_name', city_key)
+        if city_name:
+            cities.append(city_name)
+    
+    return sorted(cities)
+
+def clear_cache(city_name: Optional[str] = None):
+    """
+    Clear cache for a specific city or all cities.
+    
+    Args:
+        city_name (str, optional): City name to clear cache for. If None, clears all cache.
+    """
+    global _memory_cache
+    
+    if city_name:
+        city_key = city_name.strip().lower()
+        if city_key in _memory_cache:
+            del _memory_cache[city_key]
+            save_cache(_memory_cache)
+            print(f"Cache cleared for '{city_name}'")
+    else:
+        _memory_cache = {}
+        if CACHE_FILE.exists():
+            CACHE_FILE.unlink()
+        print("All cache cleared")
+
+# Initialize cache on module load
+load_cache()
