@@ -55,27 +55,70 @@ def save_base64_image(base64_string: str, images_dir: Path = None) -> str:
             from config import IMAGES_DIR
             images_dir = IMAGES_DIR
 
+        # Split the data URL into header and data
+        if "," not in base64_string:
+            print("Invalid base64 image format: missing comma separator")
+            return base64_string
+        
         header, data = base64_string.split(",", 1)
-        image_format = header.split("/")[1].split(";")[0]
-        image_data = base64.b64decode(data)
+        
+        # Extract image format from header (e.g., "data:image/jpeg;base64" -> "jpeg")
+        # Handle formats like "image/svg+xml" correctly
+        format_part = header.split("/")[1] if "/" in header else ""
+        image_format = format_part.split(";")[0].split("+")[0]  # Handle "svg+xml" -> "svg"
+        
+        # Normalize format names (jpeg -> jpg for consistency)
+        if image_format.lower() == "jpeg":
+            image_format = "jpg"
+        elif image_format.lower() == "svg+xml":
+            image_format = "svg"
+        
+        # Strip whitespace from base64 data before decoding
+        data = data.strip()
+        
+        # Decode base64 data
+        try:
+            image_data = base64.b64decode(data, validate=True)
+        except Exception as decode_error:
+            print(f"Base64 decode failed: {decode_error}")
+            return base64_string
+        
+        # Verify we got actual image data
+        if not image_data or len(image_data) == 0:
+            print("Decoded image data is empty")
+            return base64_string
 
+        # Determine target directory based on images_dir structure
         if images_dir.name == "images":
             target_dir = images_dir / "properties"
         else:
             target_dir = images_dir / "images" / "properties"
 
+        # Create directory if it doesn't exist
         target_dir.mkdir(parents=True, exist_ok=True)
 
+        # Generate unique filename
         filename = f"{uuid.uuid4()}.{image_format}"
         file_path = target_dir / filename
 
+        # Write image data to file
         with open(file_path, "wb") as f:
             f.write(image_data)
+        
+        # Verify file was written correctly
+        if not file_path.exists() or file_path.stat().st_size == 0:
+            print(f"Image file was not written correctly: {file_path}")
+            return base64_string
 
-        return f"/images/properties/{filename}"
+        # Return the URL path (relative to frontend root)
+        image_url = f"/images/properties/{filename}"
+        print(f"Image saved successfully: {image_url} (size: {file_path.stat().st_size} bytes)")
+        return image_url
 
     except Exception as e:
         print(f"Image save failed: {e}")
+        import traceback
+        traceback.print_exc()
         return base64_string
 
 
