@@ -10,7 +10,7 @@ from models import PropertyType, PropertyStatus
 from schemas import PaginatedResponse
 from utils.helpers import (
     get_pagination_params, calculate_pages, normalize_image_url, error_response, success_response,
-    process_image_urls, require_admin_auth, safe_int, safe_float, save_base64_image
+    process_image_urls, require_admin_auth, safe_int, safe_float
 )
 from config import IMAGES_DIR
 
@@ -922,32 +922,26 @@ def register_properties_routes(app):
         """Upload an image from base64 data and return the image URL"""
         try:
             data = request.get_json()
-            if not data:
-                return error_response("Invalid request data", 400)
-            
-            base64_image = data.get("image")
-            if not base64_image:
+            if not data or 'image' not in data:
                 return error_response("Image data is required", 400)
             
-            # Validate that it's a base64 image
-            if not isinstance(base64_image, str) or not base64_image.startswith("data:image/"):
-                return error_response("Invalid image format. Expected base64 data URL starting with 'data:image/'", 400)
+            base64_string = data['image']
+            if not base64_string or not isinstance(base64_string, str):
+                return error_response("Invalid image data", 400)
             
-            # Save the image using the helper function
-            image_url = save_base64_image(base64_image, IMAGES_DIR)
+            # Use the helper function to save the image
+            from utils.helpers import save_base64_image
+            image_url = save_base64_image(base64_string, IMAGES_DIR)
             
-            # Check if save was successful (should return a path, not the original base64)
-            if image_url == base64_image:
-                # save_base64_image returned the original string, meaning save failed
-                return error_response("Failed to save image", 500)
+            # If save_base64_image returns None or the original base64 string, it means saving failed
+            if not image_url or image_url == base64_string or not image_url.startswith('/images/'):
+                return error_response("Failed to save image. The image may be corrupted or in an unsupported format. Please check server logs.", 500)
             
-            return jsonify({
-                "success": True,
-                "image_url": image_url,
-                "message": "Image uploaded successfully"
-            })
+            return success_response({"image_url": image_url}, "Image uploaded successfully")
+            
         except Exception as e:
             error_msg = f"Error uploading image: {str(e)}"
+            current_app.logger.error(error_msg, exc_info=True)
             print(error_msg)
             traceback.print_exc()
-            return error_response(error_msg, 500)
+            return error_response(f"Failed to upload image: {str(e)}", 500)
