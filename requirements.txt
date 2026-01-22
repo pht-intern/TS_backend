@@ -41,7 +41,3 @@ python-dotenv>=1.0.0,<2.0.0
 # System Monitoring
 # psutil for system metrics (CPU, RAM, etc.) - Compatible with Python 3.11
 psutil>=5.9.0,<6.0.0
-
-# HTTP Requests
-# requests for Pelias API integration - Compatible with Python 3.11
-requests>=2.31.0,<3.0.0
