@@ -1,6 +1,6 @@
 """
 City to Localities/Areas Mapping
-This module fetches city localities dynamically from Google Maps Places API.
+This module fetches city localities dynamically from Pelias geocoding API.
 Results are cached to minimize API calls and improve performance.
 """
 import os
@@ -18,26 +18,27 @@ else:
     load_dotenv()
 
 try:
-    import googlemaps
-    GOOGLEMAPS_AVAILABLE = True
+    import requests
+    REQUESTS_AVAILABLE = True
 except ImportError:
-    GOOGLEMAPS_AVAILABLE = False
-    print("WARNING: googlemaps library not installed. Install it with: pip install googlemaps")
+    REQUESTS_AVAILABLE = False
+    print("WARNING: requests library not installed. Install it with: pip install requests")
 
-# Google Maps API key from environment
-GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
+# Pelias API endpoint from environment
+# Default to geocode.earth public API, but can be overridden for self-hosted instances
+PELIAS_API_URL = os.getenv("PELIAS_API_URL", "https://api.geocode.earth/v1")
 
-# Initialize Google Maps client if API key is available
-gmaps_client = None
-if GOOGLEMAPS_AVAILABLE and GOOGLE_MAPS_API_KEY:
-    try:
-        gmaps_client = googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
-        print("✓ Google Maps API client initialized successfully")
-    except Exception as e:
-        print(f"WARNING: Failed to initialize Google Maps client: {str(e)}")
-        gmaps_client = None
-elif not GOOGLE_MAPS_API_KEY:
-    print("WARNING: GOOGLE_MAPS_API_KEY not found in environment variables. Google Maps API will not be available.")
+# Validate Pelias API URL
+if not PELIAS_API_URL.endswith('/v1'):
+    if PELIAS_API_URL.endswith('/'):
+        PELIAS_API_URL = PELIAS_API_URL.rstrip('/') + '/v1'
+    else:
+        PELIAS_API_URL = PELIAS_API_URL.rstrip('/') + '/v1'
+
+if REQUESTS_AVAILABLE:
+    print(f"✓ Pelias API client initialized with endpoint: {PELIAS_API_URL}")
+else:
+    print("WARNING: requests library not available. Pelias API will not be available.")
 
 # Cache configuration
 CACHE_DIR = Path(PROJECT_ROOT) / "backend" / "data" / "cache"
@@ -81,9 +82,9 @@ def save_cache(cache_data: Dict):
     except Exception as e:
         print(f"Error saving cache: {str(e)}")
 
-def fetch_localities_from_google_maps(city_name: str) -> List[str]:
+def fetch_localities_from_pelias(city_name: str) -> List[str]:
     """
-    Fetch localities/neighborhoods for a city using Google Maps Places API.
+    Fetch localities/neighborhoods for a city using Pelias geocoding API.
     
     Args:
         city_name (str): Name of the city
@@ -91,121 +92,199 @@ def fetch_localities_from_google_maps(city_name: str) -> List[str]:
     Returns:
         List[str]: List of locality names
     """
-    if not gmaps_client:
-        print(f"[Google Maps] API not available for city '{city_name}'")
+    if not REQUESTS_AVAILABLE:
+        print(f"[Pelias] API not available for city '{city_name}'")
         return []
     
-    localities = []
+    localities = set()
     
     try:
-        # Step 1: Find the city using Text Search
+        # Step 1: Find the city using search API
         city_query = f"{city_name}, India"
-        print(f"[Google Maps] Searching for city: {city_query}")
+        print(f"[Pelias] Searching for city: {city_query}")
         
-        places_result = gmaps_client.places(query=city_query, type='locality')
+        search_url = f"{PELIAS_API_URL}/search"
+        params = {
+            'text': city_query,
+            'size': 10,
+            'layers': 'locality,localadmin',  # Focus on cities/localities
+            'boundary.country': 'IN'  # Restrict to India
+        }
         
-        if not places_result.get('results'):
+        response = requests.get(search_url, params=params, timeout=10)
+        
+        if response.status_code != 200:
             # Try without "India" suffix
-            places_result = gmaps_client.places(query=city_name, type='locality')
+            params['text'] = city_name
+            response = requests.get(search_url, params=params, timeout=10)
         
-        if not places_result.get('results'):
-            print(f"[Google Maps] City '{city_name}' not found")
+        if response.status_code != 200:
+            print(f"[Pelias] API request failed with status {response.status_code} for city '{city_name}'")
+            return []
+        
+        data = response.json()
+        features = data.get('features', [])
+        
+        if not features:
+            print(f"[Pelias] City '{city_name}' not found")
             return []
         
         # Get the first result (most relevant city)
-        city_place = places_result['results'][0]
-        city_location = city_place.get('geometry', {}).get('location', {})
+        city_feature = features[0]
+        city_properties = city_feature.get('properties', {})
+        city_geometry = city_feature.get('geometry', {})
         
-        if not city_location:
-            print(f"[Google Maps] No location found for city '{city_name}'")
+        if not city_geometry or 'coordinates' not in city_geometry:
+            print(f"[Pelias] No coordinates found for city '{city_name}'")
             return []
         
-        lat = city_location.get('lat')
-        lng = city_location.get('lng')
+        coordinates = city_geometry['coordinates']
+        lon, lat = coordinates[0], coordinates[1]
         
-        print(f"[Google Maps] Found city '{city_name}' at coordinates: {lat}, {lng}")
+        print(f"[Pelias] Found city '{city_name}' at coordinates: {lat}, {lon}")
         
-        # Step 2: Search for neighborhoods/sublocalities using Nearby Search
-        # Search for different types of places that represent localities
-        place_types = ['neighborhood', 'sublocality', 'sublocality_level_1', 'sublocality_level_2']
+        # Step 2: Search for neighborhoods/localities in the city using autocomplete
+        # Autocomplete is better for finding sub-localities
+        autocomplete_url = f"{PELIAS_API_URL}/autocomplete"
         
-        all_places = set()
+        # Try multiple search strategies
+        search_queries = [
+            f"{city_name}",
+            f"neighborhoods in {city_name}",
+            f"areas in {city_name}",
+            f"localities in {city_name}"
+        ]
         
-        for place_type in place_types:
+        for query in search_queries:
             try:
-                # Nearby search for neighborhoods
-                nearby_result = gmaps_client.places_nearby(
-                    location=(lat, lng),
-                    radius=20000,  # 20km radius
-                    type=place_type
+                autocomplete_params = {
+                    'text': query,
+                    'size': 20,
+                    'layers': 'neighbourhood,locality,localadmin',  # Include neighborhoods
+                    'boundary.country': 'IN',
+                    'focus.point.lat': lat,
+                    'focus.point.lon': lon
+                }
+                
+                autocomplete_response = requests.get(
+                    autocomplete_url, 
+                    params=autocomplete_params, 
+                    timeout=10
                 )
                 
-                if nearby_result.get('results'):
-                    for place in nearby_result.get('results', []):
-                        place_name = place.get('name', '').strip()
-                        if place_name and len(place_name) > 2:
-                            all_places.add(place_name)
-                
-                # Also try Text Search for neighborhoods in the city
-                text_query = f"neighborhoods in {city_name}"
-                text_result = gmaps_client.places(query=text_query)
-                
-                if text_result.get('results'):
-                    for place in text_result.get('results', []):
-                        place_name = place.get('name', '').strip()
-                        if place_name and len(place_name) > 2:
-                            all_places.add(place_name)
+                if autocomplete_response.status_code == 200:
+                    autocomplete_data = autocomplete_response.json()
+                    autocomplete_features = autocomplete_data.get('features', [])
+                    
+                    for feature in autocomplete_features:
+                        props = feature.get('properties', {})
+                        
+                        # Extract locality/neighborhood names
+                        # Pelias provides different fields depending on the result type
+                        name = props.get('name', '').strip()
+                        locality = props.get('locality', '').strip()
+                        neighbourhood = props.get('neighbourhood', '').strip()
+                        localadmin = props.get('localadmin', '').strip()
+                        
+                        # Add valid locality names
+                        for loc_name in [name, locality, neighbourhood, localadmin]:
+                            if loc_name and len(loc_name) > 2:
+                                # Filter out the city name itself and common non-locality terms
+                                loc_lower = loc_name.lower()
+                                city_lower = city_name.lower()
+                                if (loc_lower != city_lower and 
+                                    loc_lower not in ['india', 'indian', 'city', 'town'] and
+                                    city_lower not in loc_lower):  # Avoid city name in locality
+                                    localities.add(loc_name)
                 
                 # Small delay to respect rate limits
-                time.sleep(0.1)
+                time.sleep(0.2)
                 
             except Exception as e:
-                print(f"[Google Maps] Error searching for {place_type} in {city_name}: {str(e)}")
+                print(f"[Pelias] Error in autocomplete query '{query}': {str(e)}")
                 continue
         
-        # Step 3: Use Autocomplete to get more locality suggestions
+        # Step 3: Use reverse geocoding to find nearby localities
         try:
-            autocomplete_result = gmaps_client.places_autocomplete(
-                input_text=f"{city_name} ",
-                types='(cities)',
-                components={'country': 'in'}  # Restrict to India
-            )
+            reverse_url = f"{PELIAS_API_URL}/reverse"
+            reverse_params = {
+                'point.lat': lat,
+                'point.lon': lon,
+                'size': 50,
+                'layers': 'neighbourhood,locality,localadmin'
+            }
             
-            # Also search for specific areas/neighborhoods
-            for suggestion in autocomplete_result[:10]:  # Limit to first 10
-                description = suggestion.get('description', '')
-                # Extract locality names from descriptions like "Locality, City, State, India"
-                parts = description.split(',')
-                if len(parts) > 0:
-                    locality_name = parts[0].strip()
-                    if locality_name and locality_name.lower() != city_name.lower():
-                        all_places.add(locality_name)
-        except Exception as e:
-            print(f"[Google Maps] Error in autocomplete for {city_name}: {str(e)}")
-        
-        # Step 4: Use Place Details to get address components
-        try:
-            place_id = city_place.get('place_id')
-            if place_id:
-                place_details = gmaps_client.place(place_id=place_id, fields=['address_component'])
+            reverse_response = requests.get(reverse_url, params=reverse_params, timeout=10)
+            
+            if reverse_response.status_code == 200:
+                reverse_data = reverse_response.json()
+                reverse_features = reverse_data.get('features', [])
                 
-                address_components = place_details.get('result', {}).get('address_components', [])
-                for component in address_components:
-                    types = component.get('types', [])
-                    if 'sublocality' in types or 'neighborhood' in types or 'sublocality_level_1' in types:
-                        name = component.get('long_name', '').strip()
-                        if name:
-                            all_places.add(name)
+                for feature in reverse_features:
+                    props = feature.get('properties', {})
+                    name = props.get('name', '').strip()
+                    locality = props.get('locality', '').strip()
+                    neighbourhood = props.get('neighbourhood', '').strip()
+                    
+                    for loc_name in [name, locality, neighbourhood]:
+                        if loc_name and len(loc_name) > 2:
+                            loc_lower = loc_name.lower()
+                            city_lower = city_name.lower()
+                            if (loc_lower != city_lower and 
+                                loc_lower not in ['india', 'indian', 'city', 'town'] and
+                                city_lower not in loc_lower):
+                                localities.add(loc_name)
         except Exception as e:
-            print(f"[Google Maps] Error getting place details for {city_name}: {str(e)}")
+            print(f"[Pelias] Error in reverse geocoding for {city_name}: {str(e)}")
         
-        localities = sorted(list(all_places))
-        print(f"[Google Maps] Found {len(localities)} localities for '{city_name}'")
+        # Step 4: Search for specific areas using broader search
+        try:
+            # Search with different locality-related terms
+            locality_terms = ['area', 'sector', 'colony', 'nagar', 'layout', 'extension']
+            
+            for term in locality_terms:
+                search_params = {
+                    'text': f"{term} {city_name}",
+                    'size': 15,
+                    'layers': 'neighbourhood,locality',
+                    'boundary.country': 'IN',
+                    'focus.point.lat': lat,
+                    'focus.point.lon': lon
+                }
+                
+                search_response = requests.get(search_url, params=search_params, timeout=10)
+                
+                if search_response.status_code == 200:
+                    search_data = search_response.json()
+                    search_features = search_data.get('features', [])
+                    
+                    for feature in search_features:
+                        props = feature.get('properties', {})
+                        name = props.get('name', '').strip()
+                        
+                        if name and len(name) > 2:
+                            loc_lower = name.lower()
+                            city_lower = city_name.lower()
+                            if (loc_lower != city_lower and 
+                                city_lower not in loc_lower):
+                                localities.add(name)
+                
+                time.sleep(0.1)
+                
+        except Exception as e:
+            print(f"[Pelias] Error in locality term search for {city_name}: {str(e)}")
         
-        return localities
+        # Convert to sorted list
+        localities_list = sorted(list(localities))
+        print(f"[Pelias] Found {len(localities_list)} localities for '{city_name}'")
         
+        return localities_list
+        
+    except requests.exceptions.RequestException as e:
+        print(f"[Pelias] Network error fetching localities for '{city_name}': {str(e)}")
+        return []
     except Exception as e:
-        print(f"[Google Maps] Error fetching localities for '{city_name}': {str(e)}")
+        print(f"[Pelias] Error fetching localities for '{city_name}': {str(e)}")
         import traceback
         traceback.print_exc()
         return []
@@ -213,7 +292,7 @@ def fetch_localities_from_google_maps(city_name: str) -> List[str]:
 def get_localities_for_city(city_name: str) -> List[str]:
     """
     Get localities for a given city name.
-    First checks cache, then Google Maps API if needed.
+    First checks cache, then Pelias API if needed.
     Returns a list of localities or empty list if city not found.
     
     Args:
@@ -240,9 +319,9 @@ def get_localities_for_city(city_name: str) -> List[str]:
         print(f"[City Mapping] Cache hit for '{city_normalized}': {len(localities)} localities")
         return localities.copy()
     
-    # Cache miss - fetch from Google Maps API
-    print(f"[City Mapping] Cache miss for '{city_normalized}', fetching from Google Maps...")
-    localities = fetch_localities_from_google_maps(city_normalized)
+    # Cache miss - fetch from Pelias API
+    print(f"[City Mapping] Cache miss for '{city_normalized}', fetching from Pelias...")
+    localities = fetch_localities_from_pelias(city_normalized)
     
     # Store in cache
     if localities:
