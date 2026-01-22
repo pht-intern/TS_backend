@@ -133,15 +133,19 @@ def register_testimonials_routes(app):
                 1 if testimonial_data.is_featured else 0
             ))
             
-            # Return the created testimonial
-            result = execute_query("SELECT * FROM testimonials WHERE id = %s", (testimonial_id,))
-            testimonial_dict = dict(result[0])
-            
-            # Ensure all required fields are present
-            if 'is_featured' not in testimonial_dict:
-                testimonial_dict['is_featured'] = False
-            if 'created_at' not in testimonial_dict:
-                testimonial_dict['created_at'] = None
+            # Return the created testimonial directly (no re-fetch needed)
+            testimonial_dict = {
+                'id': testimonial_id,
+                'client_name': testimonial_data.client_name,
+                'client_email': testimonial_data.client_email,
+                'client_phone': testimonial_data.client_phone,
+                'service_type': testimonial_data.service_type,
+                'rating': testimonial_data.rating,
+                'message': testimonial_data.message,
+                'is_approved': bool(testimonial_data.is_approved),
+                'is_featured': bool(testimonial_data.is_featured),
+                'created_at': datetime.now().isoformat()  # Use current time for optimistic update
+            }
             
             response = TestimonialResponseSchema(**testimonial_dict)
             return jsonify(response.dict()), 201

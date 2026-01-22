@@ -146,25 +146,16 @@ def register_categories_routes(app):
                 is_active_int
             ))
             
-            # Return the created category
-            result = execute_query("SELECT * FROM categories WHERE id = %s", (category_id,))
-            if not result:
-                abort_with_message(500, "Failed to retrieve created category")
-            
-            category_dict = dict(result[0])
-            
-            # Convert datetime objects to ISO format strings
-            def convert_datetime_to_iso(obj):
-                """Recursively convert datetime objects to ISO format strings"""
-                if isinstance(obj, datetime):
-                    return obj.isoformat()
-                if isinstance(obj, dict):
-                    return {k: convert_datetime_to_iso(v) for k, v in obj.items()}
-                if isinstance(obj, list):
-                    return [convert_datetime_to_iso(v) for v in obj]
-                return obj
-            
-            category_data = convert_datetime_to_iso(category_dict)
+            # Return the created category directly (no re-fetch needed)
+            category_data = {
+                'id': category_id,
+                'name': name,
+                'display_name': display_name,
+                'is_active': bool(is_active),
+                'created_at': None,  # Will be set by DB, but not needed for response
+                'updated_at': None,
+                'properties_count': 0  # New category has no properties yet
+            }
             
             return jsonify(category_data), 201
         except Exception as e:

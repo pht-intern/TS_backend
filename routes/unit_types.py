@@ -160,25 +160,17 @@ def register_unit_types_routes(app):
                 is_active_int
             ))
             
-            # Return the created unit type
-            result = execute_query("SELECT * FROM unit_types WHERE id = %s", (unit_type_id,))
-            if not result:
-                abort_with_message(500, "Failed to retrieve created unit type")
-            
-            unit_type_dict = dict(result[0])
-            
-            # Convert datetime objects to ISO format strings
-            def convert_datetime_to_iso(obj):
-                """Recursively convert datetime objects to ISO format strings"""
-                if isinstance(obj, datetime):
-                    return obj.isoformat()
-                if isinstance(obj, dict):
-                    return {k: convert_datetime_to_iso(v) for k, v in obj.items()}
-                if isinstance(obj, list):
-                    return [convert_datetime_to_iso(v) for v in obj]
-                return obj
-            
-            unit_type_data = convert_datetime_to_iso(unit_type_dict)
+            # Return the created unit type directly (no re-fetch needed)
+            unit_type_data = {
+                'id': unit_type_id,
+                'name': name,
+                'display_name': display_name,
+                'bedrooms': bedrooms,
+                'is_active': bool(is_active),
+                'created_at': None,  # Will be set by DB, but not needed for response
+                'updated_at': None,
+                'properties_count': 0  # New unit type has no properties yet
+            }
             
             return jsonify(unit_type_data), 201
         except Exception as e:

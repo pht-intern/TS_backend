@@ -24,6 +24,8 @@ from database import (
 from utils.setup import setup_admin_user
 from utils.helpers import get_client_ip
 
+print("App imported")
+
 # Get debug mode from environment
 DEBUG_MODE = os.getenv("DEBUG", "False").lower() == "true"
 
@@ -84,40 +86,52 @@ CORS(app,
 # Frontend directory is imported from config module above
 # This ensures consistent path handling across all modules
 
-# Initialize database on app startup
-print("Starting Tirumakudalu Properties API...")
-if init_db_pool():
-    if test_connection():
-        print("Database connection successful!")
-        setup_admin_user()
-        # Create application_metrics table if it doesn't exist
-        try:
-            create_app_metrics_table = """
-                CREATE TABLE IF NOT EXISTS application_metrics (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    endpoint VARCHAR(255) NOT NULL COMMENT 'API endpoint path',
-                    method VARCHAR(10) NOT NULL COMMENT 'HTTP method',
-                    response_time_ms DECIMAL(10, 2) NOT NULL COMMENT 'Response time in milliseconds',
-                    status_code INT NOT NULL COMMENT 'HTTP status code',
-                    is_error BOOLEAN DEFAULT FALSE COMMENT 'Whether the request resulted in an error',
-                    ip_address VARCHAR(45) NULL COMMENT 'Client IP address',
-                    user_agent TEXT NULL COMMENT 'User agent string',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    INDEX idx_endpoint (endpoint),
-                    INDEX idx_method (method),
-                    INDEX idx_status_code (status_code),
-                    INDEX idx_created_at (created_at),
-                    INDEX idx_endpoint_created (endpoint, created_at)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """
-            execute_update(create_app_metrics_table)
-            print("Application metrics table ready")
-        except Exception as e:
-            print(f"Warning: Could not create application_metrics table: {str(e)}")
+# Global flag to ensure startup tasks run only once (Flask 3-safe replacement for before_first_request)
+app_started = False
+
+@app.before_request
+def startup_tasks():
+    """Initialize database and perform startup tasks - runs once when app starts serving"""
+    global app_started
+    if app_started:
+        return
+
+    print("Running startup tasks...")
+    print("Starting Tirumakudalu Properties API...")
+    if init_db_pool():
+        if test_connection():
+            print("Database connection successful!")
+            setup_admin_user()
+            # Create application_metrics table if it doesn't exist
+            try:
+                create_app_metrics_table = """
+                    CREATE TABLE IF NOT EXISTS application_metrics (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        endpoint VARCHAR(255) NOT NULL COMMENT 'API endpoint path',
+                        method VARCHAR(10) NOT NULL COMMENT 'HTTP method',
+                        response_time_ms DECIMAL(10, 2) NOT NULL COMMENT 'Response time in milliseconds',
+                        status_code INT NOT NULL COMMENT 'HTTP status code',
+                        is_error BOOLEAN DEFAULT FALSE COMMENT 'Whether the request resulted in an error',
+                        ip_address VARCHAR(45) NULL COMMENT 'Client IP address',
+                        user_agent TEXT NULL COMMENT 'User agent string',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        INDEX idx_endpoint (endpoint),
+                        INDEX idx_method (method),
+                        INDEX idx_status_code (status_code),
+                        INDEX idx_created_at (created_at),
+                        INDEX idx_endpoint_created (endpoint, created_at)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+                execute_update(create_app_metrics_table)
+                print("Application metrics table ready")
+            except Exception as e:
+                print(f"Warning: Could not create application_metrics table: {str(e)}")
+        else:
+            print("Warning: Database connection test failed")
     else:
-        print("Warning: Database connection test failed")
-else:
-    print("Warning: Database pool initialization failed")
+        print("Warning: Database pool initialization failed")
+    
+    app_started = True
 
 # Application metrics tracking middleware
 @app.before_request
@@ -244,112 +258,6 @@ try:
     visitor_info.register_visitor_info_routes(app)
     print("✓ Core route modules loaded successfully")
     
-    # Import remaining routes from old app.py
-    # NOTE: This is a temporary solution to avoid breaking functionality
-    # Routes will be gradually moved to separate modules
-    print("Loading remaining routes from backup...")
-    # Try to find backup file in various locations
-    old_app_path = Path(__file__).parent / "app.py.backup"
-    if not old_app_path.exists():
-        # Try in parent directory documents folder
-        old_app_path = Path(__file__).parent.parent / "doccuments" / "app.py.backup"
-    if not old_app_path.exists():
-        print("Warning: No backup app.py found. Some routes may not be available.")
-        old_app_path = None
-    
-    if old_app_path and old_app_path.exists():
-        # Import the old app module and copy route registrations
-        # We'll import it and register routes on our app instance
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("old_app_routes", str(old_app_path))
-        if spec is None:
-            print(f"Warning: Could not create spec for {old_app_path}")
-        else:
-            old_app_module = importlib.util.module_from_spec(spec)
-            
-            # Create a mock Flask app for the old module to use
-            # Then we'll copy routes to our app
-            class MockApp:
-                def route(self, *args, **kwargs):
-                    def decorator(f):
-                        # Register the route on our actual app
-                        app.route(*args, **kwargs)(f)
-                        return f
-                    return decorator
-            
-            # Set up the old module's namespace
-            import sys
-            old_namespace = {
-                'app': MockApp(),
-                'Flask': Flask,
-                'request': request,
-                'jsonify': jsonify,
-                'send_file': send_file,
-                'make_response': make_response,
-                'url_for': url_for,
-                'CORS': CORS,
-            }
-            
-            # Import all dependencies into namespace
-            from database import get_db_cursor, execute_query, execute_update, execute_insert, test_connection
-            from schemas import *
-            from models import *
-            from utils.helpers import *
-            from utils.auth import *
-            from utils.email import *
-            from utils.cache import *
-            import os, json, traceback, threading, time, base64, uuid, csv, io, re
-            from datetime import datetime
-            from typing import List, Optional, Tuple
-            from pathlib import Path
-            from pydantic import ValidationError
-            
-            old_namespace.update({
-                'get_db_cursor': get_db_cursor,
-                'execute_query': execute_query,
-                'execute_update': execute_update,
-                'execute_insert': execute_insert,
-                'os': os,
-                'json': json,
-                'traceback': traceback,
-                'threading': threading,
-                'time': time,
-                'base64': base64,
-                'uuid': uuid,
-                'csv': csv,
-                'io': io,
-                're': re,
-                'datetime': datetime,
-                'List': List,
-                'Optional': Optional,
-                'Tuple': Tuple,
-                'Path': Path,
-                'FRONTEND_DIR': FRONTEND_DIR,
-                'PROJECT_ROOT': PROJECT_ROOT,
-            })
-            # Import config module paths into namespace
-            # This ensures old routes use the same paths as new routes
-            from config import FRONTEND_DIR as CONFIG_FRONTEND_DIR, IMAGES_DIR, PROJECT_ROOT as CONFIG_PROJECT_ROOT
-            old_namespace['FRONTEND_DIR'] = CONFIG_FRONTEND_DIR
-            old_namespace['IMAGES_DIR'] = IMAGES_DIR
-            old_namespace['PROJECT_ROOT'] = CONFIG_PROJECT_ROOT
-            # For backward compatibility, also set BASE_DIR
-            old_namespace['BASE_DIR'] = CONFIG_PROJECT_ROOT
-            old_namespace.update(globals())
-            
-            # Load the old app module (this will register routes via MockApp)
-            try:
-                spec.loader.exec_module(old_app_module)
-                # Routes are now registered on our app via MockApp
-                print("✓ Routes from backup app.py loaded successfully")
-            except Exception as load_error:
-                print(f"Warning: Error loading routes from backup: {load_error}")
-                import traceback
-                traceback.print_exc()
-    else:
-        print("Warning: Backup app.py not found. Some routes may not be available.")
-        print("Note: Routes should be gradually moved to route modules in backend/routes/")
-        
 except ImportError as e:
     print(f"Warning: Could not load some route modules: {e}")
     import traceback

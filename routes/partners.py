@@ -90,23 +90,18 @@ def register_partners_routes(app):
                 partner_data.display_order
             ))
             
-            # Return the created partner
-            partners = execute_query("SELECT * FROM partners WHERE id = %s", (partner_id,))
-            partner_dict = dict(partners[0])
-            if 'logo_url' in partner_dict and partner_dict['logo_url']:
-                partner_dict['logo_url'] = normalize_image_url(partner_dict['logo_url'])
-            
-            # Ensure all required fields are present
-            if 'is_active' in partner_dict and isinstance(partner_dict['is_active'], int):
-                partner_dict['is_active'] = bool(partner_dict['is_active'])
-            if 'display_order' not in partner_dict:
-                partner_dict['display_order'] = 0
-            if 'description' not in partner_dict:
-                partner_dict['description'] = None
-            if 'created_at' not in partner_dict:
-                partner_dict['created_at'] = None
-            if 'updated_at' not in partner_dict:
-                partner_dict['updated_at'] = None
+            # Return the created partner directly (no re-fetch needed)
+            partner_dict = {
+                'id': partner_id,
+                'name': partner_data.name,
+                'logo_url': normalize_image_url(partner_data.logo_url) if partner_data.logo_url else None,
+                'website_url': partner_data.website_url,
+                'is_active': bool(partner_data.is_active),
+                'display_order': partner_data.display_order,
+                'description': None,
+                'created_at': None,
+                'updated_at': None
+            }
             
             response = PartnerResponseSchema(**partner_dict)
             return jsonify(response.dict()), 201

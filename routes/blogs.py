@@ -171,24 +171,22 @@ def register_blogs_routes(app):
                 1 if blog_data.is_active else 0
             ))
             
-            # Return the created blog
-            blog_query = "SELECT * FROM blogs WHERE id = %s"
-            blogs = execute_query(blog_query, (blog_id,))
-            blog_data_dict = dict(blogs[0])
-            
-            if blog_data_dict.get('tags'):
-                try:
-                    if isinstance(blog_data_dict['tags'], str):
-                        blog_data_dict['tags'] = json.loads(blog_data_dict['tags'])
-                    elif not isinstance(blog_data_dict['tags'], list):
-                        blog_data_dict['tags'] = []
-                except:
-                    blog_data_dict['tags'] = []
-            else:
-                blog_data_dict['tags'] = []
-            
-            if 'image_url' in blog_data_dict and blog_data_dict['image_url']:
-                blog_data_dict['image_url'] = normalize_image_url(blog_data_dict['image_url'])
+            # Return the created blog directly (no re-fetch needed)
+            blog_data_dict = {
+                'id': blog_id,
+                'title': blog_data.title,
+                'excerpt': blog_data.excerpt,
+                'content': blog_data.content,
+                'category': blog_data.category,
+                'tags': blog_data.tags or [],
+                'image_url': normalize_image_url(blog_data.image_url) if blog_data.image_url else None,
+                'author': blog_data.author or 'Tirumakudalu Properties',
+                'views': blog_data.views or 0,
+                'is_featured': bool(blog_data.is_featured),
+                'is_active': bool(blog_data.is_active),
+                'created_at': None,  # Will be set by DB, but not needed for response
+                'updated_at': None
+            }
             
             response = BlogResponseSchema(**blog_data_dict)
             return jsonify(response.dict()), 201
