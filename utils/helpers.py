@@ -147,12 +147,33 @@ def normalize_image_url(url: Optional[str]) -> Optional[str]:
     if url.startswith(("http://", "https://", "data:")):
         return url
 
+    # If URL is already in /api/images/{id} format, return as is
+    if url.startswith("/api/images/"):
+        return url
+
     if "/public_html/" in url:
         url = "/" + url.split("/public_html/", 1)[1].lstrip("/")
 
-    if "/images/" in url:
-        url = url[url.rfind("/images/"):]
+    # Check if URL is a numeric ID (database-stored image)
+    # Strip leading/trailing slashes and check if it's a pure number
+    url_clean = url.lstrip('/').rstrip('/')
+    
+    # Check if it's a numeric ID (either just a number, or /images/{number})
+    if url_clean.isdigit():
+        # It's a numeric ID, convert to /api/images/{id}
+        return f"/api/images/{url_clean}"
+    
+    # Check if it's /images/{number} format
+    if url.startswith("/images/"):
+        # Extract the part after /images/
+        after_images = url[8:].lstrip('/')  # 8 = len("/images/")
+        if after_images.isdigit():
+            # It's /images/{number}, convert to /api/images/{number}
+            return f"/api/images/{after_images}"
+        # Otherwise, it's a file path, keep as is
+        return url
 
+    # For file paths, ensure they start with /images/
     return url if url.startswith("/images/") else f"/images/{url.lstrip('/')}"
 
 
