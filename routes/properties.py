@@ -426,6 +426,7 @@ def register_properties_routes(app):
                                 }
                                 db_category = category_map.get(image_category, "project")
                                 
+                                # Insert into property images table
                                 execute_insert(
                                     f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
                                     (property_id, processed_urls[0], db_category, idx)
@@ -439,6 +440,7 @@ def register_properties_routes(app):
                     processed = process_image_urls(images, None)
                     for idx, url in enumerate(processed):
                         if url:
+                            # Insert into property images table
                             execute_insert(
                                 f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
                                 (property_id, url, 'project', idx)
@@ -787,6 +789,7 @@ def register_properties_routes(app):
                                 }
                                 db_category = category_map.get(image_category, "project")
                                 
+                                # Insert into property images table
                                 execute_update(
                                     f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
                                     (property_id, processed_urls[0], db_category, idx)
@@ -800,6 +803,7 @@ def register_properties_routes(app):
                     processed = process_image_urls(images, None)
                     for idx, url in enumerate(processed):
                         if url:
+                            # Insert into property images table
                             execute_update(
                                 f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
                                 (property_id, url, 'project', idx)
@@ -916,10 +920,11 @@ def register_properties_routes(app):
         """Create property functionality has been removed"""
         return error_response("Property creation functionality has been disabled", 403)
     
+    
     @app.route("/api/upload-image", methods=["POST"])
     @require_admin_auth
     def upload_image():
-        """Upload an image from base64 data and return the image URL"""
+        """Upload an image from base64 data, save to filesystem, and optionally store in property images table if property_id is provided"""
         try:
             data = request.get_json()
             if not data or 'image' not in data:
@@ -929,7 +934,12 @@ def register_properties_routes(app):
             if not base64_string or not isinstance(base64_string, str):
                 return error_response("Invalid image data", 400)
             
-            # Use the helper function to save the image
+            # Get property category and image category from request
+            property_category = data.get('property_category', 'residential')  # Default to residential
+            image_category = data.get('image_category', 'project')  # Default to project
+            property_id = data.get('property_id')  # Optional, for linking to existing property
+            
+            # Use the helper function to save the image to filesystem
             from utils.helpers import save_base64_image
             image_url = save_base64_image(base64_string, IMAGES_DIR)
             
@@ -937,7 +947,57 @@ def register_properties_routes(app):
             if not image_url or image_url == base64_string or not image_url.startswith('/images/'):
                 return error_response("Failed to save image. The image may be corrupted or in an unsupported format. Please check server logs.", 500)
             
-            return success_response({"image_url": image_url}, "Image uploaded successfully")
+            # If property_id is provided, store image in the appropriate property images table immediately
+            image_id = None
+            if property_id:
+                try:
+                    # Determine which table to use based on property category
+                    if property_category == 'plot' or property_category == 'plot_properties':
+                        img_table = "plot_property_images"
+                    else:
+                        img_table = "residential_property_images"
+                    
+                    # Map frontend image categories to DB categories
+                    category_map = {
+                        "project": "project",
+                        "floorplan": "floorplan",
+                        "masterplan": "masterplan"
+                    }
+                    db_category = category_map.get(image_category, "project")
+                    
+                    # Get current max order for this property to set next order
+                    order_query = f"""
+                        SELECT COALESCE(MAX(image_order), -1) + 1 as next_order 
+                        FROM {img_table} 
+                        WHERE property_id = %s
+                    """
+                    order_result = execute_query(order_query, (property_id,))
+                    next_order = order_result[0]['next_order'] if order_result else 0
+                    
+                    # Insert image into property images table
+                    insert_query = f"""
+                        INSERT INTO {img_table} (property_id, image_url, image_category, image_order) 
+                        VALUES (%s, %s, %s, %s)
+                    """
+                    image_id = execute_insert(insert_query, (
+                        property_id,
+                        image_url,
+                        db_category,
+                        next_order
+                    ))
+                except Exception as db_err:
+                    # If database insert fails, log but still return image URL
+                    print(f"Warning: Could not store image in database: {str(db_err)}")
+                    traceback.print_exc()
+            
+            # Return success response with image URL
+            # Note: If property_id is not provided, image will be stored in database when property is created/updated
+            return success_response({
+                "image_url": image_url,
+                "image_id": image_id,
+                "property_category": property_category,
+                "image_category": image_category
+            }, "Image uploaded successfully" + (" and stored in database" if image_id else ""))
             
         except Exception as e:
             error_msg = f"Error uploading image: {str(e)}"

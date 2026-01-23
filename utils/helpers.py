@@ -244,6 +244,47 @@ def abort_with_message(code: int, message: str):
 
 
 # ==========================================================
+# SESSION VALIDATION
+# ==========================================================
+def validate_active_session():
+    """
+    Check if there's an active session in the database.
+    Returns (is_valid, session_info) tuple.
+    If no active session exists, returns (False, None).
+    """
+    try:
+        active_session_query = """
+            SELECT * FROM user_sessions 
+            WHERE is_active = 1 
+            AND expires_at > NOW()
+            ORDER BY created_at DESC
+            LIMIT 1
+        """
+        active_sessions = execute_query(active_session_query)
+        
+        if active_sessions and len(active_sessions) > 0:
+            active_session = active_sessions[0]
+            return (True, {
+                "session_id": active_session.get('session_id'),
+                "user_id": active_session.get('user_id'),
+                "user_email": active_session.get('user_email'),
+                "ip_address": active_session.get('ip_address'),
+                "created_at": active_session.get('created_at'),
+                "expires_at": active_session.get('expires_at')
+            })
+        else:
+            return (False, None)
+    except Exception as e:
+        # If table doesn't exist or error, return no active session
+        error_msg = str(e).lower()
+        if "table" in error_msg and ("doesn't exist" in error_msg or "unknown table" in error_msg):
+            return (False, None)
+        # Log error but don't block - let the request continue
+        print(f"Warning: Error validating session: {str(e)}")
+        return (False, None)
+
+
+# ==========================================================
 # ADMIN AUTH DECORATOR (FINAL & SAFE)
 # ==========================================================
 def require_admin_auth(f):
@@ -288,6 +329,12 @@ def require_admin_auth(f):
             users = execute_query(user_query, (auth_email,))
             if not users:
                 return error_response("Unauthorized", 401)
+            
+            # Optional: Validate active session (can be enabled for stricter control)
+            # For now, we rely on login blocking, but this can be enabled if needed
+            # has_active_session, session_info = validate_active_session()
+            # if not has_active_session:
+            #     return error_response("No active session", 401)
 
         except Exception:
             traceback.print_exc()
