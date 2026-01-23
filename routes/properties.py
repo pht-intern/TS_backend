@@ -924,7 +924,7 @@ def register_properties_routes(app):
     @app.route("/api/upload-image", methods=["POST", "OPTIONS"])
     @require_admin_auth
     def upload_image():
-        """Upload an image from base64 data, save to filesystem, and optionally store in property images table if property_id is provided"""
+        """Upload an image from base64 data, store in database, and return image URL"""
         # Handle CORS preflight
         if request.method == "OPTIONS":
             response = make_response()
@@ -945,79 +945,52 @@ def register_properties_routes(app):
             if not base64_string or not isinstance(base64_string, str):
                 return error_response("Invalid image data", 400)
             
-            # Get property category and image category from request
-            property_category = data.get('property_category', 'residential')  # Default to residential
-            image_category = data.get('image_category', 'project')  # Default to project
-            property_id = data.get('property_id')  # Optional, for linking to existing property
+            # Parse base64 image data
+            import base64 as base64_lib
+            if not base64_string.startswith("data:image/"):
+                return error_response("Invalid image format. Expected base64 data URL.", 400)
             
-            # Use the helper function to save the image to filesystem
-            from utils.helpers import save_base64_image
-            image_url = save_base64_image(base64_string, IMAGES_DIR)
+            # Extract content type and image data
+            header, image_data_str = base64_string.split(",", 1)
+            content_type = header.split(":")[1].split(";")[0]  # e.g., "image/jpeg"
             
-            # If save_base64_image returns None or the original base64 string, it means saving failed
-            if not image_url:
-                return error_response("Failed to save image. The image may be corrupted or in an unsupported format. Please check server logs.", 500)
+            # Decode base64 image data
+            try:
+                image_data = base64_lib.b64decode(image_data_str)
+            except Exception as decode_err:
+                return error_response(f"Failed to decode image data: {str(decode_err)}", 400)
             
-            if image_url == base64_string:
-                return error_response("Failed to process image. Invalid image format.", 500)
+            if not image_data or len(image_data) == 0:
+                return error_response("Decoded image data is empty", 400)
             
-            if not image_url.startswith('/images/'):
-                return error_response(f"Failed to save image. Invalid image URL returned: {image_url}", 500)
-            
-            # If property_id is provided, store image in the appropriate property images table immediately
-            image_id = None
-            if property_id:
-                try:
-                    # Determine which table to use based on property category
-                    if property_category == 'plot' or property_category == 'plot_properties':
-                        img_table = "plot_property_images"
-                    else:
-                        img_table = "residential_property_images"
-                    
-                    # Map frontend image categories to DB categories
-                    category_map = {
-                        "project": "project",
-                        "floorplan": "floorplan",
-                        "masterplan": "masterplan"
+            # Store image in the images table (separate table, no modification to existing tables)
+            try:
+                # Insert image into images table
+                insert_query = """
+                    INSERT INTO images (data, content_type) 
+                    VALUES (%s, %s)
+                """
+                image_id = execute_insert(insert_query, (image_data, content_type))
+                
+                if not image_id:
+                    return error_response("Failed to save image to database", 500)
+                
+                # Return image URL pointing to the serving endpoint
+                image_url = f"/api/images/{image_id}"
+                
+                return success_response(
+                    message="Image uploaded successfully",
+                    data={
+                        "image_url": image_url,
+                        "image_id": image_id
                     }
-                    db_category = category_map.get(image_category, "project")
-                    
-                    # Get current max order for this property to set next order
-                    order_query = f"""
-                        SELECT COALESCE(MAX(image_order), -1) + 1 as next_order 
-                        FROM {img_table} 
-                        WHERE property_id = %s
-                    """
-                    order_result = execute_query(order_query, (property_id,))
-                    next_order = order_result[0]['next_order'] if order_result else 0
-                    
-                    # Insert image into property images table
-                    insert_query = f"""
-                        INSERT INTO {img_table} (property_id, image_url, image_category, image_order) 
-                        VALUES (%s, %s, %s, %s)
-                    """
-                    image_id = execute_insert(insert_query, (
-                        property_id,
-                        image_url,
-                        db_category,
-                        next_order
-                    ))
-                except Exception as db_err:
-                    # If database insert fails, log but still return image URL
-                    print(f"Warning: Could not store image in database: {str(db_err)}")
-                    traceback.print_exc()
-            
-            # Return success response with image URL
-            # Note: If property_id is not provided, image will be stored in database when property is created/updated
-            return success_response(
-                message="Image uploaded successfully" + (" and stored in database" if image_id else ""),
-                data={
-                    "image_url": image_url,
-                    "image_id": image_id,
-                    "property_category": property_category,
-                    "image_category": image_category
-                }
-            )
+                )
+                
+            except Exception as db_err:
+                error_msg = f"Database error: {str(db_err)}"
+                print(error_msg)
+                traceback.print_exc()
+                return error_response(f"Failed to save image: {error_msg}", 500)
             
         except Exception as e:
             error_msg = f"Error uploading image: {str(e)}"
@@ -1026,3 +999,39 @@ def register_properties_routes(app):
             print(error_msg)
             traceback.print_exc()
             return error_response(f"Failed to upload image: {str(e)}", 500)
+    
+    @app.route("/api/images/<int:image_id>", methods=["GET"])
+    def get_image(image_id):
+        """Retrieve and serve image from database"""
+        try:
+            # Get image from images table
+            query = """
+                SELECT data, content_type 
+                FROM images 
+                WHERE id = %s
+            """
+            result = execute_query(query, (image_id,))
+            
+            if not result or len(result) == 0:
+                return error_response("Image not found", 404)
+            
+            image_data = result[0]['data']
+            content_type = result[0]['content_type']
+            
+            if not image_data:
+                return error_response("Image data is empty", 404)
+            
+            # Create response with image data
+            response = make_response(image_data)
+            response.headers['Content-Type'] = content_type
+            response.headers['Cache-Control'] = 'public, max-age=31536000'  # Cache for 1 year
+            
+            return response
+            
+        except Exception as e:
+            error_msg = f"Error retrieving image: {str(e)}"
+            if current_app.logger:
+                current_app.logger.error(error_msg, exc_info=True)
+            print(error_msg)
+            traceback.print_exc()
+            return error_response(f"Failed to retrieve image: {str(e)}", 500)

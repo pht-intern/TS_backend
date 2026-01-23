@@ -69,20 +69,32 @@ def save_base64_image(base64_string: str, images_dir: Path = None) -> Optional[s
         image_format = format_part.lower()
         
         # Validate and normalize image format
-        # Map common formats to file extensions
+        # Map common formats to file extensions - support all common image formats
         format_map = {
             'jpeg': 'jpg',  # Use .jpg extension for JPEG
             'jpg': 'jpg',
             'png': 'png',
             'gif': 'gif',
             'webp': 'webp',
-            'svg+xml': 'svg'
+            'svg+xml': 'svg',
+            'svg': 'svg',
+            'bmp': 'bmp',
+            'ico': 'ico',
+            'tiff': 'tiff',
+            'tif': 'tiff',
+            'heic': 'heic',
+            'heif': 'heif',
+            'avif': 'avif'
         }
         
+        # If format not in map, try to use it directly (for unknown formats)
         if image_format not in format_map:
-            raise ValueError(f"Unsupported image format: {image_format}. Supported formats: jpeg, jpg, png, gif, webp, svg+xml")
-        
-        file_extension = format_map[image_format]
+            # For unknown formats, try to use the format name directly
+            # Remove any + characters and use as extension
+            file_extension = image_format.replace('+', '').split(';')[0]
+            print(f"Warning: Unknown image format '{image_format}', using extension '{file_extension}'")
+        else:
+            file_extension = format_map[image_format]
         
         # Decode base64 data
         try:
