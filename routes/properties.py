@@ -921,13 +921,24 @@ def register_properties_routes(app):
         return error_response("Property creation functionality has been disabled", 403)
     
     
-    @app.route("/api/upload-image", methods=["POST"])
+    @app.route("/api/upload-image", methods=["POST", "OPTIONS"])
     @require_admin_auth
     def upload_image():
         """Upload an image from base64 data, save to filesystem, and optionally store in property images table if property_id is provided"""
+        # Handle CORS preflight
+        if request.method == "OPTIONS":
+            response = make_response()
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Admin-Email'
+            return response
+        
         try:
             data = request.get_json()
-            if not data or 'image' not in data:
+            if not data:
+                return error_response("Request body is required", 400)
+            
+            if 'image' not in data:
                 return error_response("Image data is required", 400)
             
             base64_string = data['image']
@@ -944,8 +955,14 @@ def register_properties_routes(app):
             image_url = save_base64_image(base64_string, IMAGES_DIR)
             
             # If save_base64_image returns None or the original base64 string, it means saving failed
-            if not image_url or image_url == base64_string or not image_url.startswith('/images/'):
+            if not image_url:
                 return error_response("Failed to save image. The image may be corrupted or in an unsupported format. Please check server logs.", 500)
+            
+            if image_url == base64_string:
+                return error_response("Failed to process image. Invalid image format.", 500)
+            
+            if not image_url.startswith('/images/'):
+                return error_response(f"Failed to save image. Invalid image URL returned: {image_url}", 500)
             
             # If property_id is provided, store image in the appropriate property images table immediately
             image_id = None
@@ -992,16 +1009,20 @@ def register_properties_routes(app):
             
             # Return success response with image URL
             # Note: If property_id is not provided, image will be stored in database when property is created/updated
-            return success_response({
-                "image_url": image_url,
-                "image_id": image_id,
-                "property_category": property_category,
-                "image_category": image_category
-            }, "Image uploaded successfully" + (" and stored in database" if image_id else ""))
+            return success_response(
+                message="Image uploaded successfully" + (" and stored in database" if image_id else ""),
+                data={
+                    "image_url": image_url,
+                    "image_id": image_id,
+                    "property_category": property_category,
+                    "image_category": image_category
+                }
+            )
             
         except Exception as e:
             error_msg = f"Error uploading image: {str(e)}"
-            current_app.logger.error(error_msg, exc_info=True)
+            if current_app.logger:
+                current_app.logger.error(error_msg, exc_info=True)
             print(error_msg)
             traceback.print_exc()
             return error_response(f"Failed to upload image: {str(e)}", 500)
