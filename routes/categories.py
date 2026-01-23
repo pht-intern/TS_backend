@@ -56,6 +56,131 @@ def register_categories_routes(app):
                     return response
             abort_with_message(500, f"Error fetching active categories: {str(e)}")
     
+    # Define routes with path parameters BEFORE the base route
+    # This ensures Flask matches the more specific routes first
+    @app.route("/api/admin/categories/<int:category_id>", methods=["GET", "PUT", "POST", "DELETE", "OPTIONS"])
+    @require_admin_auth
+    def handle_category(category_id):
+        """Handle GET, PUT, POST, DELETE requests for a single category"""
+        # Handle OPTIONS request for CORS preflight
+        if request.method == "OPTIONS":
+            response = make_response()
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, PUT, POST, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Admin-Email'
+            return response
+        
+        if request.method == "GET":
+            return get_category(category_id)
+        elif request.method in ["PUT", "POST"]:
+            return update_category(category_id)
+        elif request.method == "DELETE":
+            return delete_category(category_id)
+    
+    def get_category(category_id):
+        """Get a single category by ID"""
+        try:
+            query = "SELECT id, name, display_name, is_active FROM categories WHERE id = %s"
+            result = execute_query(query, (category_id,))
+            if not result:
+                abort_with_message(404, "Category not found")
+            
+            category = dict(result[0])
+            # Convert is_active from int to bool
+            if 'is_active' in category:
+                category['is_active'] = bool(category['is_active'])
+            
+            return jsonify({
+                "success": True,
+                "category": category
+            })
+        except Exception as e:
+            print(f"Error fetching category: {str(e)}")
+            traceback.print_exc()
+            abort_with_message(500, f"Error fetching category: {str(e)}")
+    
+    def update_category(category_id):
+        """Update a category"""
+        try:
+            data = request.get_json()
+            if not data:
+                abort_with_message(400, "Invalid request data")
+            
+            # Validate required fields
+            display_name = data.get('display_name', '').strip()
+            is_active = data.get('is_active', True)
+            
+            if not display_name:
+                abort_with_message(400, "display_name is required")
+            
+            # Validate display_name length
+            if len(display_name) > 250:
+                abort_with_message(400, "Category display_name must be 250 characters or less")
+            
+            # Convert is_active to int
+            is_active_int = 1 if is_active else 0
+            
+            # Update category
+            update_query = "UPDATE categories SET display_name = %s, is_active = %s, updated_at = NOW() WHERE id = %s"
+            affected_rows = execute_update(update_query, (display_name, is_active_int, category_id))
+            
+            if affected_rows == 0:
+                abort_with_message(404, "Category not found")
+            
+            return jsonify({
+                "success": True,
+                "message": "Category updated successfully"
+            })
+        except Exception as e:
+            error_msg = str(e)
+            print(f"Error updating category: {error_msg}")
+            traceback.print_exc()
+            # Check if it's a validation error
+            if "is required" in error_msg.lower() or "must be" in error_msg.lower():
+                abort_with_message(400, error_msg)
+            abort_with_message(500, f"Error updating category: {error_msg}")
+    
+    def delete_category(category_id):
+        """Delete a category"""
+        try:
+            # First check if category exists
+            check_query = "SELECT id FROM categories WHERE id = %s"
+            existing = execute_query(check_query, (category_id,))
+            if not existing:
+                abort_with_message(404, "Category not found")
+            
+            # Check if category has associated properties (optional safety check)
+            # This is a soft check - we'll still allow deletion but warn if there are properties
+            # You can uncomment and modify this if you want to prevent deletion when properties exist
+            # residential_count = execute_query(
+            #     "SELECT COUNT(*) as count FROM residential_properties WHERE category = (SELECT name FROM categories WHERE id = %s)",
+            #     (category_id,)
+            # )
+            # plot_count = execute_query(
+            #     "SELECT COUNT(*) as count FROM plot_properties WHERE category = (SELECT name FROM categories WHERE id = %s)",
+            #     (category_id,)
+            # )
+            # total_count = (residential_count[0]['count'] if residential_count else 0) + (plot_count[0]['count'] if plot_count else 0)
+            # if total_count > 0:
+            #     abort_with_message(400, f"Cannot delete category: {total_count} properties are associated with this category")
+            
+            # Delete category
+            delete_query = "DELETE FROM categories WHERE id = %s"
+            affected_rows = execute_update(delete_query, (category_id,))
+            
+            if affected_rows == 0:
+                abort_with_message(404, "Category not found")
+            
+            return jsonify({
+                "success": True,
+                "message": "Category deleted successfully"
+            })
+        except Exception as e:
+            error_msg = str(e)
+            print(f"Error deleting category: {error_msg}")
+            traceback.print_exc()
+            abort_with_message(500, f"Error deleting category: {error_msg}")
+    
     @app.route("/api/admin/categories", methods=["GET", "POST"])
     @require_admin_auth
     def handle_categories():
@@ -166,113 +291,3 @@ def register_categories_routes(app):
             if "already exists" in error_msg.lower() or "is required" in error_msg.lower() or "must be" in error_msg.lower():
                 abort_with_message(400, error_msg)
             abort_with_message(500, f"Error creating category: {error_msg}")
-    
-    @app.route("/api/admin/categories/<int:category_id>", methods=["GET"])
-    @require_admin_auth
-    def get_category(category_id):
-        """Get a single category by ID"""
-        try:
-            query = "SELECT id, name, display_name, is_active FROM categories WHERE id = %s"
-            result = execute_query(query, (category_id,))
-            if not result:
-                abort_with_message(404, "Category not found")
-            
-            category = dict(result[0])
-            # Convert is_active from int to bool
-            if 'is_active' in category:
-                category['is_active'] = bool(category['is_active'])
-            
-            return jsonify({
-                "success": True,
-                "category": category
-            })
-        except Exception as e:
-            print(f"Error fetching category: {str(e)}")
-            traceback.print_exc()
-            abort_with_message(500, f"Error fetching category: {str(e)}")
-    
-    @app.route("/api/admin/categories/<int:category_id>", methods=["PUT", "POST"])
-    @require_admin_auth
-    def update_category(category_id):
-        """Update a category"""
-        try:
-            data = request.get_json()
-            if not data:
-                abort_with_message(400, "Invalid request data")
-            
-            # Validate required fields
-            display_name = data.get('display_name', '').strip()
-            is_active = data.get('is_active', True)
-            
-            if not display_name:
-                abort_with_message(400, "display_name is required")
-            
-            # Validate display_name length
-            if len(display_name) > 250:
-                abort_with_message(400, "Category display_name must be 250 characters or less")
-            
-            # Convert is_active to int
-            is_active_int = 1 if is_active else 0
-            
-            # Update category
-            update_query = "UPDATE categories SET display_name = %s, is_active = %s, updated_at = NOW() WHERE id = %s"
-            affected_rows = execute_update(update_query, (display_name, is_active_int, category_id))
-            
-            if affected_rows == 0:
-                abort_with_message(404, "Category not found")
-            
-            return jsonify({
-                "success": True,
-                "message": "Category updated successfully"
-            })
-        except Exception as e:
-            error_msg = str(e)
-            print(f"Error updating category: {error_msg}")
-            traceback.print_exc()
-            # Check if it's a validation error
-            if "is required" in error_msg.lower() or "must be" in error_msg.lower():
-                abort_with_message(400, error_msg)
-            abort_with_message(500, f"Error updating category: {error_msg}")
-    
-    @app.route("/api/admin/categories/<int:category_id>", methods=["DELETE"])
-    @require_admin_auth
-    def delete_category(category_id):
-        """Delete a category"""
-        try:
-            # First check if category exists
-            check_query = "SELECT id FROM categories WHERE id = %s"
-            existing = execute_query(check_query, (category_id,))
-            if not existing:
-                abort_with_message(404, "Category not found")
-            
-            # Check if category has associated properties (optional safety check)
-            # This is a soft check - we'll still allow deletion but warn if there are properties
-            # You can uncomment and modify this if you want to prevent deletion when properties exist
-            # residential_count = execute_query(
-            #     "SELECT COUNT(*) as count FROM residential_properties WHERE category = (SELECT name FROM categories WHERE id = %s)",
-            #     (category_id,)
-            # )
-            # plot_count = execute_query(
-            #     "SELECT COUNT(*) as count FROM plot_properties WHERE category = (SELECT name FROM categories WHERE id = %s)",
-            #     (category_id,)
-            # )
-            # total_count = (residential_count[0]['count'] if residential_count else 0) + (plot_count[0]['count'] if plot_count else 0)
-            # if total_count > 0:
-            #     abort_with_message(400, f"Cannot delete category: {total_count} properties are associated with this category")
-            
-            # Delete category
-            delete_query = "DELETE FROM categories WHERE id = %s"
-            affected_rows = execute_update(delete_query, (category_id,))
-            
-            if affected_rows == 0:
-                abort_with_message(404, "Category not found")
-            
-            return jsonify({
-                "success": True,
-                "message": "Category deleted successfully"
-            })
-        except Exception as e:
-            error_msg = str(e)
-            print(f"Error deleting category: {error_msg}")
-            traceback.print_exc()
-            abort_with_message(500, f"Error deleting category: {error_msg}")
