@@ -120,7 +120,9 @@ def register_cities_routes(app):
                     c.state,
                     c.is_active,
                     c.created_at,
-                    c.updated_at
+                    c.updated_at,
+                    COALESCE((SELECT COUNT(*) FROM residential_properties rp WHERE rp.city = c.name AND rp.is_active = 1), 0) + 
+                    COALESCE((SELECT COUNT(*) FROM plot_properties pp WHERE pp.city = c.name AND pp.is_active = 1), 0) as properties_count
                 FROM cities c
                 ORDER BY c.state, c.name
             """
