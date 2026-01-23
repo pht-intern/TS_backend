@@ -30,6 +30,13 @@ def register_metrics_routes(app):
             if hours > 168:  # Max 7 days
                 hours = 168
             
+            # Get system metrics hours (default to 24 for CPU, RAM, Bandwidth charts)
+            system_hours = request.args.get('system_hours', default=24, type=int)
+            if system_hours < 1:
+                system_hours = 24
+            if system_hours > 168:  # Max 7 days
+                system_hours = 168
+            
             # Get metrics aggregated by hour from application_metrics table
             query = """
                 SELECT 
@@ -118,6 +125,7 @@ def register_metrics_routes(app):
                 print(f"Note: Cache logs not available: {str(cache_error)}")
             
             # Get system metrics (CPU, RAM, Bandwidth) from system_metrics table
+            # Use system_hours (default 24) for these metrics
             system_metrics_query = """
                 SELECT 
                     cpu_usage,
@@ -133,7 +141,7 @@ def register_metrics_routes(app):
                 ORDER BY created_at ASC
             """
             
-            system_metrics = execute_query(system_metrics_query, (hours,))
+            system_metrics = execute_query(system_metrics_query, (system_hours,))
             
             # Get current system metrics (most recent)
             current_system_query = """
