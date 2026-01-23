@@ -126,6 +126,22 @@ def startup_tasks():
                 print("Application metrics table ready")
             except Exception as e:
                 print(f"Warning: Could not create application_metrics table: {str(e)}")
+            
+            # Create images table if it doesn't exist
+            try:
+                create_images_table = """
+                    CREATE TABLE IF NOT EXISTS images (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        data LONGBLOB NOT NULL COMMENT 'Binary image data',
+                        content_type VARCHAR(100) NOT NULL COMMENT 'MIME type (e.g., image/jpeg, image/png)',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        INDEX idx_created_at (created_at)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+                execute_update(create_images_table)
+                print("Images table ready")
+            except Exception as e:
+                print(f"Warning: Could not create images table: {str(e)}")
         else:
             print("Warning: Database connection test failed")
     else:
