@@ -6,7 +6,7 @@ from datetime import datetime
 import json
 import re
 import traceback
-from database import execute_query, execute_insert
+from database import execute_query, execute_insert, execute_update
 from utils.helpers import abort_with_message, require_admin_auth
 
 
@@ -56,6 +56,141 @@ def register_unit_types_routes(app):
                     response.headers['Content-Type'] = 'application/javascript'
                     return response
             return abort_with_message(500, f"Error fetching active unit types: {str(e)}")
+    
+    # Define routes with path parameters BEFORE the base route
+    # This ensures Flask matches the more specific routes first
+    # IMPORTANT: This route must be defined before /api/admin/unit-types to ensure proper matching
+    @app.route("/api/admin/unit-types/<int:unit_type_id>", methods=["GET", "PUT", "POST", "DELETE", "OPTIONS"])
+    @require_admin_auth
+    def handle_unit_type(unit_type_id):
+        """Handle GET, PUT, POST, DELETE requests for a single unit type"""
+        # Handle OPTIONS request for CORS preflight
+        if request.method == "OPTIONS":
+            response = make_response()
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, PUT, POST, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Admin-Email'
+            return response
+        
+        # Explicitly handle each method
+        if request.method == "GET":
+            return get_unit_type(unit_type_id)
+        elif request.method in ["PUT", "POST"]:
+            return update_unit_type(unit_type_id)
+        elif request.method == "DELETE":
+            return delete_unit_type(unit_type_id)
+        
+        # Fallback - should never reach here if route is configured correctly
+        return abort_with_message(405, f"Method {request.method} not allowed for this endpoint")
+    
+    def get_unit_type(unit_type_id):
+        """Get a single unit type by ID"""
+        try:
+            query = """
+                SELECT 
+                    ut.id,
+                    ut.name,
+                    ut.display_name,
+                    ut.bedrooms,
+                    ut.is_active
+                FROM unit_types ut
+                WHERE ut.id = %s
+            """
+            result = execute_query(query, (unit_type_id,))
+            if not result:
+                abort_with_message(404, "Unit type not found")
+            
+            unit_type = dict(result[0])
+            # Convert is_active from int to bool
+            if 'is_active' in unit_type:
+                unit_type['is_active'] = bool(unit_type['is_active'])
+            
+            return jsonify({
+                "success": True,
+                "unit_type": unit_type
+            })
+        except Exception as e:
+            print(f"Error fetching unit type: {str(e)}")
+            traceback.print_exc()
+            abort_with_message(500, f"Error fetching unit type: {str(e)}")
+    
+    def update_unit_type(unit_type_id):
+        """Update a unit type"""
+        try:
+            data = request.get_json()
+            if not data:
+                abort_with_message(400, "Invalid request data")
+            
+            # Validate required fields
+            display_name = data.get('display_name', '').strip()
+            is_active = data.get('is_active', True)
+            
+            if not display_name:
+                abort_with_message(400, "display_name is required")
+            
+            # Validate display_name length
+            if len(display_name) > 250:
+                abort_with_message(400, "Unit type display_name must be 250 characters or less")
+            
+            # Convert is_active to int
+            is_active_int = 1 if is_active else 0
+            
+            # Update unit type
+            update_query = "UPDATE unit_types SET display_name = %s, is_active = %s, updated_at = NOW() WHERE id = %s"
+            affected_rows = execute_update(update_query, (display_name, is_active_int, unit_type_id))
+            
+            if affected_rows == 0:
+                abort_with_message(404, "Unit type not found")
+            
+            return jsonify({
+                "success": True,
+                "message": "Unit type updated successfully"
+            })
+        except Exception as e:
+            error_msg = str(e)
+            print(f"Error updating unit type: {error_msg}")
+            traceback.print_exc()
+            # Check if it's a validation error
+            if "is required" in error_msg.lower() or "must be" in error_msg.lower():
+                abort_with_message(400, error_msg)
+            abort_with_message(500, f"Error updating unit type: {error_msg}")
+    
+    def delete_unit_type(unit_type_id):
+        """Delete a unit type"""
+        try:
+            # First check if unit type exists
+            check_query = "SELECT id FROM unit_types WHERE id = %s"
+            existing = execute_query(check_query, (unit_type_id,))
+            if not existing:
+                abort_with_message(404, "Unit type not found")
+            
+            # Check if unit type has associated properties (optional safety check)
+            # This is a soft check - we'll still allow deletion but warn if there are properties
+            # You can uncomment and modify this if you want to prevent deletion when properties exist
+            # residential_count = execute_query(
+            #     "SELECT COUNT(*) as count FROM residential_properties WHERE unit_type = (SELECT name FROM unit_types WHERE id = %s) AND is_active = 1",
+            #     (unit_type_id,)
+            # )
+            # total_count = residential_count[0]['count'] if residential_count else 0
+            # if total_count > 0:
+            #     abort_with_message(400, f"Cannot delete unit type: {total_count} properties are associated with this unit type")
+            
+            # Delete unit type
+            delete_query = "DELETE FROM unit_types WHERE id = %s"
+            affected_rows = execute_update(delete_query, (unit_type_id,))
+            
+            if affected_rows == 0:
+                abort_with_message(404, "Unit type not found")
+            
+            return jsonify({
+                "success": True,
+                "message": "Unit type deleted successfully"
+            })
+        except Exception as e:
+            error_msg = str(e)
+            print(f"Error deleting unit type: {error_msg}")
+            traceback.print_exc()
+            abort_with_message(500, f"Error deleting unit type: {error_msg}")
     
     @app.route("/api/admin/unit-types", methods=["GET", "POST"])
     @require_admin_auth
