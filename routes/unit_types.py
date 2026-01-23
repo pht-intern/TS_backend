@@ -55,7 +55,7 @@ def register_unit_types_routes(app):
                     response = make_response(f"{callback}({{'success': False, 'unit_types': []}});")
                     response.headers['Content-Type'] = 'application/javascript'
                     return response
-            abort_with_message(500, f"Error fetching active unit types: {str(e)}")
+            return abort_with_message(500, f"Error fetching active unit types: {str(e)}")
     
     @app.route("/api/admin/unit-types", methods=["GET", "POST"])
     @require_admin_auth
@@ -103,14 +103,18 @@ def register_unit_types_routes(app):
         except Exception as e:
             print(f"Error fetching all unit types: {str(e)}")
             traceback.print_exc()
-            abort_with_message(500, f"Error fetching all unit types: {str(e)}")
+            return abort_with_message(500, f"Error fetching all unit types: {str(e)}")
     
     def create_unit_type():
         """Create a new unit type"""
         try:
-            data = request.get_json()
+            # Better JSON parsing with error handling
+            if not request.is_json:
+                return abort_with_message(400, "Content-Type must be application/json")
+            
+            data = request.get_json(silent=True)
             if not data:
-                abort_with_message(400, "Invalid request data")
+                return abort_with_message(400, "Invalid request data or empty JSON body")
             
             # Validate required fields
             name = data.get('name')
@@ -118,30 +122,39 @@ def register_unit_types_routes(app):
             bedrooms = data.get('bedrooms')
             
             if not name:
-                abort_with_message(400, "Unit type name is required")
+                return abort_with_message(400, "Unit type name is required")
             if not display_name:
-                abort_with_message(400, "Unit type display_name is required")
-            if bedrooms is None:
-                abort_with_message(400, "Unit type bedrooms is required")
+                return abort_with_message(400, "Unit type display_name is required")
             
             # Validate name length
             if len(name) > 50:
-                abort_with_message(400, "Unit type name must be 50 characters or less")
+                return abort_with_message(400, "Unit type name must be 50 characters or less")
             if len(display_name) > 250:
-                abort_with_message(400, "Unit type display_name must be 250 characters or less")
+                return abort_with_message(400, "Unit type display_name must be 250 characters or less")
             
-            # Validate bedrooms is an integer
-            try:
-                bedrooms = int(bedrooms)
-                if bedrooms < 0:
-                    abort_with_message(400, "Bedrooms must be a non-negative integer")
-            except (ValueError, TypeError):
-                abort_with_message(400, "Bedrooms must be a valid integer")
+            # Handle bedrooms: make it optional, try to extract from name if not provided
+            if bedrooms is None:
+                # Try to extract bedrooms from name (e.g., "1BHK" -> 1, "2BHK" -> 2, "RK" -> 0)
+                # Look for number at the start of the name
+                match = re.match(r'^(\d+)', name.upper())
+                if match:
+                    bedrooms = int(match.group(1))
+                else:
+                    # Default to 0 if no number found (e.g., "RK", "STUDIO")
+                    bedrooms = 0
+            else:
+                # Validate bedrooms is an integer if provided
+                try:
+                    bedrooms = int(bedrooms)
+                    if bedrooms < 0:
+                        return abort_with_message(400, "Bedrooms must be a non-negative integer")
+                except (ValueError, TypeError):
+                    return abort_with_message(400, "Bedrooms must be a valid integer")
             
             # Check if unit type with same name already exists
             existing = execute_query("SELECT id FROM unit_types WHERE name = %s", (name,))
             if existing:
-                abort_with_message(400, f"Unit type with name '{name}' already exists")
+                return abort_with_message(400, f"Unit type with name '{name}' already exists")
             
             # Get optional fields
             is_active = data.get('is_active', True)
@@ -153,12 +166,20 @@ def register_unit_types_routes(app):
                 VALUES (%s, %s, %s, %s)
             """
             
-            unit_type_id = execute_insert(insert_query, (
-                name,
-                display_name,
-                bedrooms,
-                is_active_int
-            ))
+            try:
+                unit_type_id = execute_insert(insert_query, (
+                    name,
+                    display_name,
+                    bedrooms,
+                    is_active_int
+                ))
+            except Exception as db_error:
+                error_msg = str(db_error).lower()
+                # Handle duplicate key error (UNIQUE constraint violation)
+                if "duplicate" in error_msg or "unique" in error_msg or "already exists" in error_msg:
+                    return abort_with_message(400, f"Unit type with name '{name}' already exists")
+                # Re-raise other database errors
+                raise
             
             # Return the created unit type directly (no re-fetch needed)
             unit_type_data = {
@@ -178,6 +199,6 @@ def register_unit_types_routes(app):
             print(f"Error creating unit type: {error_msg}")
             traceback.print_exc()
             # Check if it's a validation error (already has status code)
-            if "already exists" in error_msg.lower() or "is required" in error_msg.lower() or "must be" in error_msg.lower() or "must be a" in error_msg.lower():
-                abort_with_message(400, error_msg)
-            abort_with_message(500, f"Error creating unit type: {error_msg}")
+            if "already exists" in error_msg.lower() or "is required" in error_msg.lower() or "must be" in error_msg.lower() or "must be a" in error_msg.lower() or "duplicate" in error_msg.lower() or "unique" in error_msg.lower():
+                return abort_with_message(400, error_msg)
+            return abort_with_message(500, f"Error creating unit type: {error_msg}")

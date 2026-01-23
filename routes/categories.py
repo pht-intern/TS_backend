@@ -58,6 +58,7 @@ def register_categories_routes(app):
     
     # Define routes with path parameters BEFORE the base route
     # This ensures Flask matches the more specific routes first
+    # IMPORTANT: This route must be defined before /api/admin/categories to ensure proper matching
     @app.route("/api/admin/categories/<int:category_id>", methods=["GET", "PUT", "POST", "DELETE", "OPTIONS"])
     @require_admin_auth
     def handle_category(category_id):
@@ -70,12 +71,16 @@ def register_categories_routes(app):
             response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Admin-Email'
             return response
         
+        # Explicitly handle each method
         if request.method == "GET":
             return get_category(category_id)
         elif request.method in ["PUT", "POST"]:
             return update_category(category_id)
         elif request.method == "DELETE":
             return delete_category(category_id)
+        
+        # Fallback - should never reach here if route is configured correctly
+        return abort_with_message(405, f"Method {request.method} not allowed for this endpoint")
     
     def get_category(category_id):
         """Get a single category by ID"""
