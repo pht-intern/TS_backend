@@ -5,7 +5,7 @@ from flask import request, jsonify
 import traceback
 from database import execute_query, execute_update, execute_insert
 from schemas import PartnerResponseSchema, PartnerUpdateSchema, PartnerCreateSchema
-from utils.helpers import normalize_image_url, abort_with_message, require_admin_auth
+from utils.helpers import normalize_image_url, get_image_url_from_logo_url, abort_with_message, require_admin_auth
 
 
 def register_partners_routes(app):
@@ -51,6 +51,9 @@ def register_partners_routes(app):
                     if 'logo_url' in partner_dict and partner_dict['logo_url']:
                         partner_dict['logo_url'] = normalize_image_url(partner_dict['logo_url'])
                     
+                    # Add image_url field in /uploads/{filename} format for frontend
+                    partner_dict['image_url'] = get_image_url_from_logo_url(partner_dict.get('logo_url'))
+                    
                     normalized_partners.append(PartnerResponseSchema(**partner_dict))
                 except Exception as schema_error:
                     print(f"Error converting partner {p.get('id', 'unknown')}: {str(schema_error)}")
@@ -91,10 +94,12 @@ def register_partners_routes(app):
             ))
             
             # Return the created partner directly (no re-fetch needed)
+            logo_url_normalized = normalize_image_url(partner_data.logo_url) if partner_data.logo_url else None
             partner_dict = {
                 'id': partner_id,
                 'name': partner_data.name,
-                'logo_url': normalize_image_url(partner_data.logo_url) if partner_data.logo_url else None,
+                'logo_url': logo_url_normalized,
+                'image_url': get_image_url_from_logo_url(logo_url_normalized),
                 'website_url': partner_data.website_url,
                 'is_active': bool(partner_data.is_active),
                 'display_order': partner_data.display_order,
@@ -153,6 +158,9 @@ def register_partners_routes(app):
             partner_dict = dict(partners[0])
             if 'logo_url' in partner_dict:
                 partner_dict['logo_url'] = normalize_image_url(partner_dict['logo_url'])
+            
+            # Add image_url field in /uploads/{filename} format for frontend
+            partner_dict['image_url'] = get_image_url_from_logo_url(partner_dict.get('logo_url'))
             
             response = PartnerResponseSchema(**partner_dict)
             return jsonify(response.dict())

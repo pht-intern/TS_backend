@@ -177,6 +177,45 @@ def normalize_image_url(url: Optional[str]) -> Optional[str]:
     return url if url.startswith("/images/") else f"/images/{url.lstrip('/')}"
 
 
+def get_image_url_from_logo_url(logo_url: Optional[str]) -> Optional[str]:
+    """
+    Convert logo_url to image_url in /uploads/{filename} format.
+    Extracts the filename from various URL formats and returns /uploads/{filename}.
+    This is used for partners/testimonials where backend returns full image URL.
+    """
+    if not logo_url:
+        return None
+    
+    # If already in /uploads/ format, return as is
+    if logo_url.startswith("/uploads/"):
+        return logo_url
+    
+    # Remove query parameters if any
+    logo_url_clean = logo_url.split('?')[0]
+    
+    # Extract the filename from the path
+    # Handle absolute paths, relative paths, and just filenames
+    path_obj = Path(logo_url_clean)
+    filename = path_obj.name
+    
+    # If no filename extracted or it's just a numeric ID, return None
+    # Numeric IDs (like "3" or "/images/3") don't have meaningful filenames
+    if not filename or filename == logo_url_clean:
+        return None
+    
+    # Check if filename is just a number (numeric ID) - can't create valid file path
+    if filename.isdigit():
+        return None
+    
+    # Check if filename has a valid extension (basic validation)
+    # If it doesn't look like a file, return None
+    if '.' not in filename:
+        return None
+    
+    # Return in /uploads/{filename} format
+    return f"/uploads/{filename}"
+
+
 # ==========================================================
 # SAFE CONVERTERS
 # ==========================================================
