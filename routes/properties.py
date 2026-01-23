@@ -405,6 +405,8 @@ def register_properties_routes(app):
                 feature_category = "residential"
             
             # Handle images from gallery
+            # Images are already uploaded to images table and have URLs like /api/images/{image_id}
+            # We just need to link them to this property
             image_gallery = data.get("image_gallery") or []
             images = data.get("images") or []
             
@@ -414,37 +416,57 @@ def register_properties_routes(app):
                     for idx, gallery_item in enumerate(image_gallery):
                         image_url = gallery_item.get("image_url")
                         if image_url:
-                            # Process and normalize image URL
-                            processed_urls = process_image_urls([image_url], None)
-                            if processed_urls:
-                                image_category = gallery_item.get("category", "project")
-                                # Map frontend categories to DB categories
-                                category_map = {
-                                    "project": "project",
-                                    "floorplan": "floorplan",
-                                    "masterplan": "masterplan"
-                                }
-                                db_category = category_map.get(image_category, "project")
-                                
-                                # Insert into property images table
-                                execute_insert(
-                                    f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
-                                    (property_id, processed_urls[0], db_category, idx)
-                                )
+                            # If image_url is already in /api/images/{id} format, use it directly
+                            # Otherwise, process it (for backward compatibility with base64 or file paths)
+                            if image_url.startswith("/api/images/"):
+                                # Already stored in images table, use URL directly
+                                final_url = image_url
+                            else:
+                                # Legacy: process base64 or file paths
+                                processed_urls = process_image_urls([image_url], None)
+                                if not processed_urls:
+                                    continue
+                                final_url = processed_urls[0]
+                            
+                            image_category = gallery_item.get("category", "project")
+                            # Map frontend categories to DB categories
+                            category_map = {
+                                "project": "project",
+                                "floorplan": "floorplan",
+                                "masterplan": "masterplan"
+                            }
+                            db_category = category_map.get(image_category, "project")
+                            
+                            # Insert into property images table
+                            execute_insert(
+                                f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
+                                (property_id, final_url, db_category, idx)
+                            )
                 except Exception as img_err:
                     print(f"Warning: could not insert gallery images for property {property_id}: {img_err}")
             
             # Fallback to flat images list if gallery is empty
             if not image_gallery and images:
                 try:
-                    processed = process_image_urls(images, None)
-                    for idx, url in enumerate(processed):
-                        if url:
-                            # Insert into property images table
-                            execute_insert(
-                                f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
-                                (property_id, url, 'project', idx)
-                            )
+                    for idx, url in enumerate(images):
+                        if not url:
+                            continue
+                        
+                        # If image_url is already in /api/images/{id} format, use it directly
+                        if url.startswith("/api/images/"):
+                            final_url = url
+                        else:
+                            # Legacy: process base64 or file paths
+                            processed = process_image_urls([url], None)
+                            if not processed:
+                                continue
+                            final_url = processed[0]
+                        
+                        # Insert into property images table
+                        execute_insert(
+                            f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
+                            (property_id, final_url, 'project', idx)
+                        )
                 except Exception as img_err:
                     print(f"Warning: could not insert images for property {property_id}: {img_err}")
             
@@ -772,42 +794,63 @@ def register_properties_routes(app):
                 print(f"Warning: could not delete images for property {property_id}: {img_del_err}")
             
             # Process gallery images if available (preferred format with categories)
+            # Images are already uploaded to images table and have URLs like /api/images/{image_id}
             if image_gallery:
                 try:
                     for idx, gallery_item in enumerate(image_gallery):
                         image_url = gallery_item.get("image_url")
                         if image_url:
-                            # Process and normalize image URL
-                            processed_urls = process_image_urls([image_url], None)
-                            if processed_urls:
-                                image_category = gallery_item.get("category", "project")
-                                # Map frontend categories to DB categories
-                                category_map = {
-                                    "project": "project",
-                                    "floorplan": "floorplan",
-                                    "masterplan": "masterplan"
-                                }
-                                db_category = category_map.get(image_category, "project")
-                                
-                                # Insert into property images table
-                                execute_update(
-                                    f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
-                                    (property_id, processed_urls[0], db_category, idx)
-                                )
+                            # If image_url is already in /api/images/{id} format, use it directly
+                            # Otherwise, process it (for backward compatibility with base64 or file paths)
+                            if image_url.startswith("/api/images/"):
+                                # Already stored in images table, use URL directly
+                                final_url = image_url
+                            else:
+                                # Legacy: process base64 or file paths
+                                processed_urls = process_image_urls([image_url], None)
+                                if not processed_urls:
+                                    continue
+                                final_url = processed_urls[0]
+                            
+                            image_category = gallery_item.get("category", "project")
+                            # Map frontend categories to DB categories
+                            category_map = {
+                                "project": "project",
+                                "floorplan": "floorplan",
+                                "masterplan": "masterplan"
+                            }
+                            db_category = category_map.get(image_category, "project")
+                            
+                            # Insert into property images table
+                            execute_update(
+                                f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
+                                (property_id, final_url, db_category, idx)
+                            )
                 except Exception as img_err:
                     print(f"Warning: could not update gallery images for property {property_id}: {img_err}")
             
             # Fallback to flat images list if gallery is empty
             if not image_gallery and images:
                 try:
-                    processed = process_image_urls(images, None)
-                    for idx, url in enumerate(processed):
-                        if url:
-                            # Insert into property images table
-                            execute_update(
-                                f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
-                                (property_id, url, 'project', idx)
-                            )
+                    for idx, url in enumerate(images):
+                        if not url:
+                            continue
+                        
+                        # If image_url is already in /api/images/{id} format, use it directly
+                        if url.startswith("/api/images/"):
+                            final_url = url
+                        else:
+                            # Legacy: process base64 or file paths
+                            processed = process_image_urls([url], None)
+                            if not processed:
+                                continue
+                            final_url = processed[0]
+                        
+                        # Insert into property images table
+                        execute_update(
+                            f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
+                            (property_id, final_url, 'project', idx)
+                        )
                 except Exception as img_err:
                     print(f"Warning: could not update images for property {property_id}: {img_err}")
             
