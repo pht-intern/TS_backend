@@ -125,7 +125,7 @@ def register_properties_routes(app):
                 SELECT 
                     id, city, locality, property_name as title, property_name, 
                     unit_type, bedrooms, bathrooms, buildup_area as area, buildup_area, carpet_area, 
-                    super_built_up_area, price, price_text, price_negotiable, price_includes_registration,
+                    super_built_up_area, price, price_text, price_negotiable,
                     type, status, property_status, description,
                     location_link, directions, length, breadth,
                     builder, configuration, total_flats, total_floors, total_acres,
@@ -133,7 +133,8 @@ def register_properties_routes(app):
                     'residential' as property_category,
                     NULL as plot_area, NULL as plot_length, NULL as plot_breadth,
                     NULL as project_name,
-                    type as property_type
+                    type as property_type,
+                    NULL as price_includes_registration
                 FROM residential_properties
                 WHERE {residential_where}
                 ORDER BY created_at DESC
@@ -147,14 +148,15 @@ def register_properties_routes(app):
                     SELECT 
                         id, city, locality, project_name as title, project_name as property_name,
                         NULL as unit_type, 0 as bedrooms, 0 as bathrooms, plot_area as area, NULL as buildup_area, NULL as carpet_area,
-                        NULL as super_built_up_area, price, price_text, price_negotiable, price_includes_registration,
+                        NULL as super_built_up_area, price, price_text, price_negotiable,
                         'plot' as type, status, property_status, description,
                         location_link, directions, NULL as length, NULL as breadth,
                         builder, NULL as configuration, NULL as total_flats, NULL as total_floors, total_acres,
                         is_featured, is_active, created_at, updated_at,
                         'plot' as property_category,
                         plot_area, plot_length, plot_breadth,
-                        project_name
+                        project_name,
+                        NULL as price_includes_registration
                     FROM plot_properties
                     WHERE {plot_where}
                     ORDER BY created_at DESC
@@ -272,6 +274,11 @@ def register_properties_routes(app):
             data = request.get_json()
             if not data:
                 return error_response("Invalid request data", 400)
+
+            # Accept frontend facing-direction dropdown value under `direction`
+            # (DB column is `directions`; keep compatibility without a schema migration)
+            if data.get("directions") is None and data.get("direction") is not None:
+                data["directions"] = data.get("direction")
             
             property_type = data.get("property_type")
             if not property_type:
@@ -293,9 +300,63 @@ def register_properties_routes(app):
             }
             db_type = _type_map.get(property_type, property_type)
             
-            # Handle status and property_status
-            _status = data.get("status", "sale")
-            _pstat = None if _status in ("sale", "rent") else data.get("property_status")
+            def _normalize_db_status(value):
+                if value is None:
+                    return None
+                v = str(value).strip().lower()
+                if v in ("new",):
+                    return "new"
+                if v in ("resale", "resell"):
+                    return "resell"
+                if v in ("sale", "sell", "rent"):
+                    return "sell"
+                return None
+
+            def _normalize_db_listing_type(value):
+                if value is None:
+                    return None
+                v = str(value).strip().lower()
+                if v in ("ready_to_move", "ready to move", "ready-to-move"):
+                    return "Ready to move"
+                if v in (
+                    "under_construction", "under construction", "under-construction",
+                    "under_development", "under development", "under-development",
+                ):
+                    return "Under construction"
+                if v == "ready":
+                    return "Ready to move"
+                return None
+
+            def _normalize_db_villa_type(value):
+                if value is None:
+                    return None
+                v = str(value).strip().lower().replace('-', '_').replace(' ', '_')
+                if v in ("independent_villa", "independentvilla"):
+                    return "Independent Villa"
+                if v in ("row_villa", "rowvilla"):
+                    return "Row Villa"
+                if v in ("villament",):
+                    return "Villament"
+                if v in ("independent",):
+                    return "Independent Villa"
+                if v in ("row",):
+                    return "Row Villa"
+                return None
+
+            # Handle status / listing_type according to DB constraints
+            # DB status: new|sell|resell
+            # DB listing_type: Under construction|Ready to move
+            _status = (
+                _normalize_db_status(data.get("listing_type"))
+                or _normalize_db_status(data.get("status"))
+                or "sell"
+            )
+            _listing_type = (
+                _normalize_db_listing_type(data.get("listing_type"))
+                or _normalize_db_listing_type(data.get("property_status"))
+                or "Ready to move"
+            )
+            _pstat = data.get("property_status")
             
             if is_plot:
                 # Create plot property
@@ -317,8 +378,8 @@ def register_properties_routes(app):
                 insert_query = """
                     INSERT INTO plot_properties (
                         city, locality, project_name, plot_area, plot_length, plot_breadth,
-                        price, price_text, price_negotiable, price_includes_registration,
-                        status, property_status, description,
+                        price, price_text, price_negotiable,
+                        status, listing_type, property_status, description,
                         location_link, directions, builder, total_acres,
                         is_featured, is_active
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -328,8 +389,7 @@ def register_properties_routes(app):
                     city, locality, project_name, plot_area, plot_length, plot_breadth,
                     price, data.get("price_text"), 
                     1 if data.get("price_negotiable") else 0,
-                    1 if data.get("price_includes_registration") else 0,
-                    _status, _pstat, data.get("description"),
+                    _status, _listing_type, _pstat, data.get("description"),
                     data.get("location_link"), data.get("directions"),
                     data.get("builder"), safe_float(data.get("total_acres"), None),
                     1 if data.get("is_featured") else 0,
@@ -370,17 +430,24 @@ def register_properties_routes(app):
                 
                 # Map property_type to DB type
                 db_property_type = _type_map.get(property_type, "apartment")
+
+                _villa_type = None
+                if db_property_type == "villa":
+                    _villa_type = (
+                        _normalize_db_villa_type(data.get("villa_type"))
+                        or _normalize_db_villa_type(data.get("villaType"))
+                    )
                 
                 insert_query = """
                     INSERT INTO residential_properties (
                         city, locality, property_name, unit_type, bedrooms, bathrooms,
                         buildup_area, carpet_area, super_built_up_area,
-                        price, price_text, price_negotiable, price_includes_registration,
-                        type, status, property_status, description,
+                        price, price_text, price_negotiable,
+                        type, villa_type, status, listing_type, property_status, description,
                         location_link, directions, length, breadth,
                         builder, configuration, total_flats, total_floors, total_acres,
                         is_featured, is_active
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 
                 property_id = execute_insert(insert_query, (
@@ -388,8 +455,7 @@ def register_properties_routes(app):
                     buildup_area, carpet_area, super_buildup_area,
                     price, data.get("price_text"),
                     1 if data.get("price_negotiable") else 0,
-                    1 if data.get("price_includes_registration") else 0,
-                    db_property_type, _status, _pstat, data.get("description"),
+                    db_property_type, _villa_type, _status, _listing_type, _pstat, data.get("description"),
                     data.get("location_link"), data.get("directions"),
                     safe_float(data.get("length"), None),
                     safe_float(data.get("breadth"), None),
@@ -506,15 +572,16 @@ def register_properties_routes(app):
                 SELECT 
                     id, city, locality, property_name as title, property_name, 
                     unit_type, bedrooms, bathrooms, buildup_area as area, buildup_area, carpet_area, 
-                    super_built_up_area, price, price_text, price_negotiable, price_includes_registration,
-                    type, status, property_status, description,
+                    super_built_up_area, price, price_text, price_negotiable,
+                    type, villa_type, status, listing_type, property_status, description,
                     location_link, directions, length, breadth,
                     builder, configuration, total_flats, total_floors, total_acres,
                     is_featured, is_active, created_at, updated_at,
                     'residential' as property_category,
                     NULL as plot_area, NULL as plot_length, NULL as plot_breadth,
                     NULL as project_name,
-                    type as property_type
+                    type as property_type,
+                    NULL as price_includes_registration
                 FROM residential_properties
                 WHERE id = %s
             """
@@ -527,7 +594,7 @@ def register_properties_routes(app):
                     SELECT 
                         id, city, locality, project_name as title, project_name as property_name,
                         NULL as unit_type, 0 as bedrooms, 0 as bathrooms, plot_area as area, NULL as buildup_area, NULL as carpet_area,
-                        NULL as super_built_up_area, price, price_text, price_negotiable, price_includes_registration,
+                        NULL as super_built_up_area, price, price_text, price_negotiable,
                         'plot' as type, status, property_status, description,
                         location_link, directions, NULL as length, NULL as breadth,
                         builder, NULL as configuration, NULL as total_flats, NULL as total_floors, total_acres,
@@ -535,7 +602,8 @@ def register_properties_routes(app):
                         'plot' as property_category,
                         plot_area, plot_length, plot_breadth,
                         project_name,
-                        'plot_properties' as property_type
+                        'plot_properties' as property_type,
+                        NULL as price_includes_registration
                     FROM plot_properties
                     WHERE id = %s
                 """
@@ -546,6 +614,15 @@ def register_properties_routes(app):
                 return error_response("Property not found", 404)
             
             property_data = dict(properties[0])
+
+            # Provide `direction` alias for frontend dropdown prefill.
+            # Keep `directions` unchanged for backward compatibility.
+            if 'direction' not in property_data or property_data.get('direction') is None:
+                directions_val = (property_data.get('directions') or '').strip().lower() if isinstance(property_data.get('directions'), str) else None
+                if directions_val in ('east', 'west', 'north', 'south'):
+                    property_data['direction'] = directions_val
+                else:
+                    property_data['direction'] = None
             
             # Construct location from city and locality if not already present
             if 'location' not in property_data or not property_data.get('location'):
@@ -697,12 +774,66 @@ def register_properties_routes(app):
             data = request.get_json()
             if not data:
                 return error_response("Invalid request data", 400)
+
+            # Accept frontend facing-direction dropdown value under `direction`
+            # (DB column is `directions`; keep compatibility without a schema migration)
+            if data.get("directions") is None and data.get("direction") is not None:
+                data["directions"] = data.get("direction")
             
             # Map frontend type to DB enum: individual_house->house, apartments->apartment, villas->villa (avoids chk on type)
             _type_map = {"individual_house": "house", "apartments": "apartment", "villas": "villa"}
-            # When status is 'sale' or 'rent', property_status must be NULL (residential_properties_chk_2)
-            _status = data.get("status")
-            _pstat = None if _status in ("sale", "rent") else data.get("property_status")
+
+            def _normalize_db_status(value):
+                if value is None:
+                    return None
+                v = str(value).strip().lower()
+                if v in ("new",):
+                    return "new"
+                if v in ("resale", "resell"):
+                    return "resell"
+                if v in ("sale", "sell", "rent"):
+                    return "sell"
+                return None
+
+            def _normalize_db_listing_type(value):
+                if value is None:
+                    return None
+                v = str(value).strip().lower()
+                if v in ("ready_to_move", "ready to move", "ready-to-move"):
+                    return "Ready to move"
+                if v in (
+                    "under_construction", "under construction", "under-construction",
+                    "under_development", "under development", "under-development",
+                ):
+                    return "Under construction"
+                if v == "ready":
+                    return "Ready to move"
+                return None
+
+            def _normalize_db_villa_type(value):
+                if value is None:
+                    return None
+                v = str(value).strip().lower().replace('-', '_').replace(' ', '_')
+                if v in ("independent_villa", "independentvilla"):
+                    return "Independent Villa"
+                if v in ("row_villa", "rowvilla"):
+                    return "Row Villa"
+                if v in ("villament",):
+                    return "Villament"
+                if v in ("independent",):
+                    return "Independent Villa"
+                if v in ("row",):
+                    return "Row Villa"
+                return None
+
+            _status = _normalize_db_status(data.get("status")) or _normalize_db_status(data.get("listing_type"))
+            _status = _status or "sell"
+            _listing_type = (
+                _normalize_db_listing_type(data.get("listing_type"))
+                or _normalize_db_listing_type(data.get("property_status"))
+                or "Ready to move"
+            )
+            _pstat = data.get("property_status")
             
             def _add(sets, params, key, val, as_int=False, as_float=False):
                 if val is None: return
@@ -741,11 +872,12 @@ def register_properties_routes(app):
                 _add(sets, params, "price", data.get("price"), as_float=True)
                 _add(sets, params, "price_text", data.get("price_text"))
                 if "price_negotiable" in data: _add(sets, params, "price_negotiable", 1 if data.get("price_negotiable") else 0, as_int=True)
-                if "price_includes_registration" in data: _add(sets, params, "price_includes_registration", 1 if data.get("price_includes_registration") else 0, as_int=True)
                 _add(sets, params, "type", _type_map.get(data.get("type"), data.get("type")))
+                if "villa_type" in data or "villaType" in data:
+                    _add(sets, params, "villa_type", _normalize_db_villa_type(data.get("villa_type") or data.get("villaType")))
                 _add(sets, params, "status", _status)
-                if _status in ("sale", "rent"): _set_null(sets, params, "property_status")
-                else: _add(sets, params, "property_status", _pstat)
+                _add(sets, params, "listing_type", _listing_type)
+                _add(sets, params, "property_status", _pstat)
                 _add(sets, params, "description", data.get("description"))
                 if "is_featured" in data: _add(sets, params, "is_featured", 1 if data.get("is_featured") else 0, as_int=True)
                 if "is_active" in data: _add(sets, params, "is_active", 1 if data.get("is_active", True) else 0, as_int=True)
@@ -768,7 +900,6 @@ def register_properties_routes(app):
                 _add(sets, params, "price", data.get("price"), as_float=True)
                 _add(sets, params, "price_text", data.get("price_text"))
                 if "price_negotiable" in data: _add(sets, params, "price_negotiable", 1 if data.get("price_negotiable") else 0, as_int=True)
-                if "price_includes_registration" in data: _add(sets, params, "price_includes_registration", 1 if data.get("price_includes_registration") else 0, as_int=True)
                 _add(sets, params, "status", _status)
                 if _status in ("sale", "rent"): _set_null(sets, params, "property_status")
                 else: _add(sets, params, "property_status", _pstat)

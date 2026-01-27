@@ -18,10 +18,31 @@ class PropertyType(str, Enum):
 
 
 class PropertyStatus(str, Enum):
-    SALE = "sale"
-    RENT = "rent"
-    RESALE = "resale"
     NEW = "new"
+    SELL = "sell"
+    RESALE = "resale"
+
+
+class UnitType(str, Enum):
+    RK = "rk"
+    BHK = "bhk"
+    FOURPLUS = "4plus"
+
+
+class VillaType(str, Enum):
+    INDEPENDENT_VILLA = "Independent Villa"
+    ROW_VILLA = "Row Villa"
+    VILLAMENT = "Villament"
+
+
+class ListingType(str, Enum):
+    UNDER_CONSTRUCTION = "Under construction"
+    READY_TO_MOVE = "Ready to move"
+
+
+class PropertyCategory(str, Enum):
+    RESIDENTIAL = "residential"
+    PLOT = "plot"
 
 
 class InquiryStatus(str, Enum):
@@ -32,11 +53,171 @@ class InquiryStatus(str, Enum):
 
 
 # ============================================
-# PROPERTY MODELS
+# RESIDENTIAL PROPERTY MODELS
+# ============================================
+
+class ResidentialPropertyBase(BaseModel):
+    """Base residential property model"""
+    city: str = Field(..., max_length=250)
+    locality: str = Field(..., max_length=250)
+    property_name: str = Field(..., max_length=250)
+    unit_type: UnitType
+    bedrooms: int = Field(..., ge=0, description="0 for RK, 1-3 for BHK, 4+ for 4+BHK")
+    bathrooms: float = Field(default=0, ge=0, description="Number of bathrooms")
+    buildup_area: float = Field(..., gt=0, description="Buildup area in square feet")
+    carpet_area: float = Field(..., gt=0, description="Carpet area in square feet")
+    super_built_up_area: Optional[float] = Field(None, ge=0, description="Super built-up area in square feet")
+    price: float = Field(..., gt=0)
+    price_text: Optional[str] = Field(None, max_length=500, description="Original price text")
+    price_negotiable: bool = False
+    type: PropertyType = Field(..., description="Property type: house, villa, apartment")
+    villa_type: Optional[VillaType] = None
+    status: PropertyStatus
+    listing_type: ListingType
+    property_status: Optional[str] = Field(None, max_length=50, description="resale, new, ready_to_move, under_construction")
+    description: Optional[str] = None
+    location_link: Optional[str] = Field(None, description="Google Maps location link")
+    directions: Optional[str] = Field(None, description="Directions to the property")
+    length: Optional[float] = Field(None, ge=0, description="Property length in feet")
+    breadth: Optional[float] = Field(None, ge=0, description="Property breadth in feet")
+    builder: Optional[str] = Field(None, max_length=250, description="Builder/Developer name")
+    configuration: Optional[str] = Field(None, max_length=250, description="Property configuration details")
+    total_flats: Optional[int] = Field(None, ge=0, description="Total number of flats in the building")
+    total_floors: Optional[int] = Field(None, ge=0, description="Total number of floors in the building")
+    total_acres: Optional[float] = Field(None, ge=0, description="Total area in acres (for large projects)")
+    is_featured: bool = False
+    is_active: bool = True
+
+
+class ResidentialPropertyCreate(ResidentialPropertyBase):
+    """Model for creating a new residential property"""
+    pass
+
+
+class ResidentialPropertyUpdate(BaseModel):
+    """Model for updating a residential property (all fields optional)"""
+    city: Optional[str] = Field(None, max_length=250)
+    locality: Optional[str] = Field(None, max_length=250)
+    property_name: Optional[str] = Field(None, max_length=250)
+    unit_type: Optional[UnitType] = None
+    bedrooms: Optional[int] = Field(None, ge=0)
+    bathrooms: Optional[float] = Field(None, ge=0)
+    buildup_area: Optional[float] = Field(None, gt=0)
+    carpet_area: Optional[float] = Field(None, gt=0)
+    super_built_up_area: Optional[float] = Field(None, ge=0)
+    price: Optional[float] = Field(None, gt=0)
+    price_text: Optional[str] = Field(None, max_length=500)
+    price_negotiable: Optional[bool] = None
+    type: Optional[PropertyType] = None
+    villa_type: Optional[VillaType] = None
+    status: Optional[PropertyStatus] = None
+    listing_type: Optional[ListingType] = None
+    property_status: Optional[str] = Field(None, max_length=50)
+    description: Optional[str] = None
+    location_link: Optional[str] = None
+    directions: Optional[str] = None
+    length: Optional[float] = Field(None, ge=0)
+    breadth: Optional[float] = Field(None, ge=0)
+    builder: Optional[str] = Field(None, max_length=250)
+    configuration: Optional[str] = Field(None, max_length=250)
+    total_flats: Optional[int] = Field(None, ge=0)
+    total_floors: Optional[int] = Field(None, ge=0)
+    total_acres: Optional[float] = Field(None, ge=0)
+    is_featured: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+class ResidentialProperty(ResidentialPropertyBase):
+    """Complete residential property model with database fields"""
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================
+# PLOT PROPERTY MODELS
+# ============================================
+
+class PlotPropertyBase(BaseModel):
+    """Base plot property model"""
+    city: str = Field(..., max_length=250)
+    locality: str = Field(..., max_length=250)
+    project_name: str = Field(..., max_length=250)
+    plot_area: float = Field(..., gt=0, description="Plot area in square feet")
+    plot_length: float = Field(..., gt=0, description="Plot length in feet")
+    plot_breadth: float = Field(..., gt=0, description="Plot breadth in feet")
+    price: float = Field(..., gt=0)
+    price_text: Optional[str] = Field(None, max_length=500, description="Original price text")
+    price_negotiable: bool = False
+    price_includes_registration: bool = False
+    status: PropertyStatus
+    listing_type: ListingType
+    property_status: Optional[str] = Field(None, max_length=50, description="resale, new, ready_to_move, under_construction")
+    description: Optional[str] = None
+    location_link: Optional[str] = Field(None, description="Google Maps location link")
+    directions: Optional[str] = Field(None, description="Directions to the property")
+    builder: Optional[str] = Field(None, max_length=250, description="Builder/Developer name")
+    total_acres: Optional[float] = Field(None, ge=0, description="Total area in acres (for large projects)")
+    is_featured: bool = False
+    is_active: bool = True
+
+
+class PlotPropertyCreate(PlotPropertyBase):
+    """Model for creating a new plot property"""
+    pass
+
+
+class PlotPropertyUpdate(BaseModel):
+    """Model for updating a plot property (all fields optional)"""
+    city: Optional[str] = Field(None, max_length=250)
+    locality: Optional[str] = Field(None, max_length=250)
+    project_name: Optional[str] = Field(None, max_length=250)
+    plot_area: Optional[float] = Field(None, gt=0)
+    plot_length: Optional[float] = Field(None, gt=0)
+    plot_breadth: Optional[float] = Field(None, gt=0)
+    price: Optional[float] = Field(None, gt=0)
+    price_text: Optional[str] = Field(None, max_length=500)
+    price_negotiable: Optional[bool] = None
+    price_includes_registration: Optional[bool] = None
+    status: Optional[PropertyStatus] = None
+    listing_type: Optional[ListingType] = None
+    property_status: Optional[str] = Field(None, max_length=50)
+    description: Optional[str] = None
+    location_link: Optional[str] = None
+    directions: Optional[str] = None
+    builder: Optional[str] = Field(None, max_length=250)
+    total_acres: Optional[float] = Field(None, ge=0)
+    is_featured: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+class PlotProperty(PlotPropertyBase):
+    """Complete plot property model with database fields"""
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================
+# LEGACY PROPERTY MODELS (for backward compatibility)
 # ============================================
 
 class PropertyBase(BaseModel):
-    """Base property model with common fields"""
+    """Base property model with common fields (legacy)"""
     title: str = Field(..., max_length=255)
     location: str = Field(..., max_length=255)
     price: float = Field(..., gt=0)

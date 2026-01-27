@@ -32,8 +32,8 @@ def register_stats_routes(app):
             query = f"""
                 SELECT 
                     COUNT(*) as total,
-                    SUM(CASE WHEN status = '{PropertyStatus.SALE.value}' THEN 1 ELSE 0 END) as for_sale,
-                    SUM(CASE WHEN status = '{PropertyStatus.RENT.value}' THEN 1 ELSE 0 END) as for_rent,
+                    SUM(CASE WHEN status = '{PropertyStatus.SELL.value}' THEN 1 ELSE 0 END) as for_sale,
+                    SUM(CASE WHEN status = '{PropertyStatus.NEW.value}' THEN 1 ELSE 0 END) as for_rent,
                     SUM(CASE WHEN is_featured = 1 THEN 1 ELSE 0 END) as featured
                 FROM (
                     SELECT status, is_featured FROM residential_properties WHERE is_active = 1

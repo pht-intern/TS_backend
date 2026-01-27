@@ -18,6 +18,13 @@ from models import (
     CacheLog, CacheOperation, CacheStatus
 )
 
+# Import new models and enums
+from models import (
+    UnitType, VillaType, ListingType, PropertyCategory,
+    ResidentialProperty, ResidentialPropertyCreate, ResidentialPropertyUpdate,
+    PlotProperty, PlotPropertyCreate, PlotPropertyUpdate
+)
+
 
 # ============================================
 # COMMON SCHEMAS
@@ -407,6 +414,590 @@ class PropertyFilterSchema(BaseModel):
     location: Optional[str] = None
     is_featured: Optional[bool] = None
     is_active: Optional[bool] = True
+
+
+# ============================================
+# RESIDENTIAL PROPERTY SCHEMAS
+# ============================================
+
+class ResidentialPropertyCreateSchema(BaseModel):
+    """Schema for creating a residential property"""
+    city: str = Field(..., max_length=250)
+    locality: str = Field(..., max_length=250)
+    property_name: str = Field(..., max_length=250)
+    unit_type: UnitType
+    bedrooms: int = Field(..., ge=0, description="0 for RK, 1-3 for BHK, 4+ for 4+BHK")
+    bathrooms: float = Field(default=0, ge=0, description="Number of bathrooms")
+    buildup_area: float = Field(..., gt=0, description="Buildup area in square feet")
+    carpet_area: float = Field(..., gt=0, description="Carpet area in square feet")
+    super_built_up_area: Optional[float] = Field(None, ge=0, description="Super built-up area in square feet")
+    price: float = Field(..., gt=0)
+    price_text: Optional[str] = Field(None, max_length=500, description="Original price text")
+    price_negotiable: bool = False
+    type: PropertyType = Field(..., description="Property type: house, villa, apartment")
+    villa_type: Optional[VillaType] = None
+    status: PropertyStatus
+    listing_type: ListingType
+    property_status: Optional[str] = Field(None, max_length=50, description="resale, new, ready_to_move, under_construction")
+    description: Optional[str] = None
+    location_link: Optional[str] = Field(None, description="Google Maps location link")
+    directions: Optional[str] = Field(None, description="Directions to the property")
+    length: Optional[float] = Field(None, ge=0, description="Property length in feet")
+    breadth: Optional[float] = Field(None, ge=0, description="Property breadth in feet")
+    builder: Optional[str] = Field(None, max_length=250, description="Builder/Developer name")
+    configuration: Optional[str] = Field(None, max_length=250, description="Property configuration details")
+    total_flats: Optional[int] = Field(None, ge=0, description="Total number of flats in the building")
+    total_floors: Optional[int] = Field(None, ge=0, description="Total number of floors in the building")
+    total_acres: Optional[float] = Field(None, ge=0, description="Total area in acres (for large projects)")
+    is_featured: bool = False
+    is_active: bool = True
+    images: Optional[List[str]] = Field(default=[], description="List of image URLs")
+    features: Optional[List[str]] = Field(default=[], description="List of feature names")
+
+
+class ResidentialPropertyUpdateSchema(BaseModel):
+    """Schema for updating a residential property"""
+    city: Optional[str] = Field(None, max_length=250)
+    locality: Optional[str] = Field(None, max_length=250)
+    property_name: Optional[str] = Field(None, max_length=250)
+    unit_type: Optional[UnitType] = None
+    bedrooms: Optional[int] = Field(None, ge=0)
+    bathrooms: Optional[float] = Field(None, ge=0)
+    buildup_area: Optional[float] = Field(None, gt=0)
+    carpet_area: Optional[float] = Field(None, gt=0)
+    super_built_up_area: Optional[float] = Field(None, ge=0)
+    price: Optional[float] = Field(None, gt=0)
+    price_text: Optional[str] = Field(None, max_length=500)
+    price_negotiable: Optional[bool] = None
+    type: Optional[PropertyType] = None
+    villa_type: Optional[VillaType] = None
+    status: Optional[PropertyStatus] = None
+    listing_type: Optional[ListingType] = None
+    property_status: Optional[str] = Field(None, max_length=50)
+    description: Optional[str] = None
+    location_link: Optional[str] = None
+    directions: Optional[str] = None
+    length: Optional[float] = Field(None, ge=0)
+    breadth: Optional[float] = Field(None, ge=0)
+    builder: Optional[str] = Field(None, max_length=250)
+    configuration: Optional[str] = Field(None, max_length=250)
+    total_flats: Optional[int] = Field(None, ge=0)
+    total_floors: Optional[int] = Field(None, ge=0)
+    total_acres: Optional[float] = Field(None, ge=0)
+    is_featured: Optional[bool] = None
+    is_active: Optional[bool] = None
+    images: Optional[List[str]] = None
+    features: Optional[List[str]] = None
+
+
+class ResidentialPropertyResponseSchema(BaseModel):
+    """Residential property response schema"""
+    id: int
+    city: str
+    locality: str
+    property_name: str
+    unit_type: UnitType
+    bedrooms: int
+    bathrooms: float
+    buildup_area: float
+    carpet_area: float
+    super_built_up_area: Optional[float] = None
+    price: float
+    price_text: Optional[str] = None
+    price_negotiable: bool
+    type: PropertyType
+    villa_type: Optional[VillaType] = None
+    status: PropertyStatus
+    listing_type: ListingType
+    property_status: Optional[str] = None
+    description: Optional[str] = None
+    location_link: Optional[str] = None
+    directions: Optional[str] = None
+    length: Optional[float] = None
+    breadth: Optional[float] = None
+    builder: Optional[str] = None
+    configuration: Optional[str] = None
+    total_flats: Optional[int] = None
+    total_floors: Optional[int] = None
+    total_acres: Optional[float] = None
+    is_featured: bool
+    is_active: bool
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    images: List[PropertyImageSchema] = Field(default_factory=list)
+    project_images: List[PropertyProjectImageSchema] = Field(default_factory=list)
+    floorplan_images: List[PropertyFloorplanImageSchema] = Field(default_factory=list)
+    masterplan_images: List[PropertyMasterplanImageSchema] = Field(default_factory=list)
+    features: List[PropertyFeatureSchema] = Field(default_factory=list)
+
+    @field_validator('is_featured', 'is_active', 'price_negotiable', mode='before')
+    @classmethod
+    def parse_bool(cls, v):
+        """Convert MySQL TINYINT(1) (0/1) to bool"""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, int):
+            return bool(v)
+        if isinstance(v, str):
+            return v.lower() in ('true', '1', 'yes', 'on')
+        return False if v is None else bool(v)
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def parse_status(cls, v):
+        """Convert status string to PropertyStatus enum - handles legacy DB values"""
+        if not v:
+            return PropertyStatus.NEW
+        if isinstance(v, PropertyStatus):
+            return v
+        if isinstance(v, str):
+            # Normalize: handle spaces, dashes, underscores, case variations
+            normalized = v.lower().replace(" ", "_").replace("-", "_").strip()
+            # Try direct match first
+            try:
+                return PropertyStatus(normalized)
+            except ValueError:
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in PropertyStatus.__members__.items():
+                    if member_name.lower() == normalized or member_value.value.lower() == normalized:
+                        return member_value
+                # Default fallback
+                return PropertyStatus.NEW
+        return PropertyStatus.NEW
+
+    @field_validator('type', mode='before')
+    @classmethod
+    def parse_type(cls, v):
+        """Convert type string to PropertyType enum - handles legacy DB values"""
+        if not v:
+            return PropertyType.HOUSE
+        if isinstance(v, PropertyType):
+            return v
+        if isinstance(v, str):
+            # Normalize: handle spaces, dashes, underscores, case variations
+            normalized = v.lower().replace(" ", "_").replace("-", "_").strip()
+            # Try direct match first
+            try:
+                return PropertyType(normalized)
+            except ValueError:
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in PropertyType.__members__.items():
+                    if member_name.lower() == normalized or member_value.value.lower() == normalized:
+                        return member_value
+                # Default fallback
+                return PropertyType.HOUSE
+        return PropertyType.HOUSE
+
+    @field_validator('unit_type', mode='before')
+    @classmethod
+    def parse_unit_type(cls, v):
+        """Convert unit_type string to UnitType enum"""
+        if not v:
+            return UnitType.BHK
+        if isinstance(v, UnitType):
+            return v
+        if isinstance(v, str):
+            # Normalize: handle spaces, dashes, underscores, case variations
+            normalized = v.lower().replace(" ", "_").replace("-", "_").strip()
+            # Try direct match first
+            try:
+                return UnitType(normalized)
+            except ValueError:
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in UnitType.__members__.items():
+                    if member_name.lower() == normalized or member_value.value.lower() == normalized:
+                        return member_value
+                # Default fallback
+                return UnitType.BHK
+        return UnitType.BHK
+
+    @field_validator('villa_type', mode='before')
+    @classmethod
+    def parse_villa_type(cls, v):
+        """Convert villa_type string to VillaType enum"""
+        if not v:
+            return None
+        if isinstance(v, VillaType):
+            return v
+        if isinstance(v, str):
+            # Try direct match first
+            try:
+                return VillaType(v)
+            except ValueError:
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in VillaType.__members__.items():
+                    if member_name.lower() == v.lower() or member_value.value.lower() == v.lower():
+                        return member_value
+                # Default fallback
+                return None
+        return None
+
+    @field_validator('listing_type', mode='before')
+    @classmethod
+    def parse_listing_type(cls, v):
+        """Convert listing_type string to ListingType enum"""
+        if not v:
+            return ListingType.READY_TO_MOVE
+        if isinstance(v, ListingType):
+            return v
+        if isinstance(v, str):
+            # Try direct match first
+            try:
+                return ListingType(v)
+            except ValueError:
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in ListingType.__members__.items():
+                    if member_name.lower() == v.lower() or member_value.value.lower() == v.lower():
+                        return member_value
+                # Default fallback
+                return ListingType.READY_TO_MOVE
+        return ListingType.READY_TO_MOVE
+
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+# ============================================
+# PLOT PROPERTY SCHEMAS
+# ============================================
+
+class PlotPropertyCreateSchema(BaseModel):
+    """Schema for creating a plot property"""
+    city: str = Field(..., max_length=250)
+    locality: str = Field(..., max_length=250)
+    project_name: str = Field(..., max_length=250)
+    plot_area: float = Field(..., gt=0, description="Plot area in square feet")
+    plot_length: float = Field(..., gt=0, description="Plot length in feet")
+    plot_breadth: float = Field(..., gt=0, description="Plot breadth in feet")
+    price: float = Field(..., gt=0)
+    price_text: Optional[str] = Field(None, max_length=500, description="Original price text")
+    price_negotiable: bool = False
+    price_includes_registration: bool = False
+    status: PropertyStatus
+    listing_type: ListingType
+    property_status: Optional[str] = Field(None, max_length=50, description="resale, new, ready_to_move, under_construction")
+    description: Optional[str] = None
+    location_link: Optional[str] = Field(None, description="Google Maps location link")
+    directions: Optional[str] = Field(None, description="Directions to the property")
+    builder: Optional[str] = Field(None, max_length=250, description="Builder/Developer name")
+    total_acres: Optional[float] = Field(None, ge=0, description="Total area in acres (for large projects)")
+    is_featured: bool = False
+    is_active: bool = True
+    images: Optional[List[str]] = Field(default=[], description="List of image URLs")
+    features: Optional[List[str]] = Field(default=[], description="List of feature names")
+
+
+class PlotPropertyUpdateSchema(BaseModel):
+    """Schema for updating a plot property"""
+    city: Optional[str] = Field(None, max_length=250)
+    locality: Optional[str] = Field(None, max_length=250)
+    project_name: Optional[str] = Field(None, max_length=250)
+    plot_area: Optional[float] = Field(None, gt=0)
+    plot_length: Optional[float] = Field(None, gt=0)
+    plot_breadth: Optional[float] = Field(None, gt=0)
+    price: Optional[float] = Field(None, gt=0)
+    price_text: Optional[str] = Field(None, max_length=500)
+    price_negotiable: Optional[bool] = None
+    price_includes_registration: Optional[bool] = None
+    status: Optional[PropertyStatus] = None
+    listing_type: Optional[ListingType] = None
+    property_status: Optional[str] = Field(None, max_length=50)
+    description: Optional[str] = None
+    location_link: Optional[str] = None
+    directions: Optional[str] = None
+    builder: Optional[str] = Field(None, max_length=250)
+    total_acres: Optional[float] = Field(None, ge=0)
+    is_featured: Optional[bool] = None
+    is_active: Optional[bool] = None
+    images: Optional[List[str]] = None
+    features: Optional[List[str]] = None
+
+
+class PlotPropertyResponseSchema(BaseModel):
+    """Plot property response schema"""
+    id: int
+    city: str
+    locality: str
+    project_name: str
+    plot_area: float
+    plot_length: float
+    plot_breadth: float
+    price: float
+    price_text: Optional[str] = None
+    price_negotiable: bool
+    price_includes_registration: bool
+    status: PropertyStatus
+    listing_type: ListingType
+    property_status: Optional[str] = None
+    description: Optional[str] = None
+    location_link: Optional[str] = None
+    directions: Optional[str] = None
+    builder: Optional[str] = None
+    total_acres: Optional[float] = None
+    is_featured: bool
+    is_active: bool
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    images: List[PropertyImageSchema] = Field(default_factory=list)
+    project_images: List[PropertyProjectImageSchema] = Field(default_factory=list)
+    floorplan_images: List[PropertyFloorplanImageSchema] = Field(default_factory=list)
+    masterplan_images: List[PropertyMasterplanImageSchema] = Field(default_factory=list)
+    features: List[PropertyFeatureSchema] = Field(default_factory=list)
+
+    @field_validator('is_featured', 'is_active', 'price_negotiable', 'price_includes_registration', mode='before')
+    @classmethod
+    def parse_bool(cls, v):
+        """Convert MySQL TINYINT(1) (0/1) to bool"""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, int):
+            return bool(v)
+        if isinstance(v, str):
+            return v.lower() in ('true', '1', 'yes', 'on')
+        return False if v is None else bool(v)
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def parse_status(cls, v):
+        """Convert status string to PropertyStatus enum - handles legacy DB values"""
+        if not v:
+            return PropertyStatus.NEW
+        if isinstance(v, PropertyStatus):
+            return v
+        if isinstance(v, str):
+            # Normalize: handle spaces, dashes, underscores, case variations
+            normalized = v.lower().replace(" ", "_").replace("-", "_").strip()
+            # Try direct match first
+            try:
+                return PropertyStatus(normalized)
+            except ValueError:
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in PropertyStatus.__members__.items():
+                    if member_name.lower() == normalized or member_value.value.lower() == normalized:
+                        return member_value
+                # Default fallback
+                return PropertyStatus.NEW
+        return PropertyStatus.NEW
+
+    @field_validator('listing_type', mode='before')
+    @classmethod
+    def parse_listing_type(cls, v):
+        """Convert listing_type string to ListingType enum"""
+        if not v:
+            return ListingType.READY_TO_MOVE
+        if isinstance(v, ListingType):
+            return v
+        if isinstance(v, str):
+            # Try direct match first
+            try:
+                return ListingType(v)
+            except ValueError:
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in ListingType.__members__.items():
+                    if member_name.lower() == v.lower() or member_value.value.lower() == v.lower():
+                        return member_value
+                # Default fallback
+                return ListingType.READY_TO_MOVE
+        return ListingType.READY_TO_MOVE
+
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
+
+
+# ============================================
+# UNIFIED PROPERTY SCHEMAS
+# ============================================
+
+class UnifiedPropertyResponseSchema(BaseModel):
+    """Unified property response schema that can handle both residential and plot properties"""
+    id: int
+    property_category: PropertyCategory  # 'residential' or 'plot'
+    # Common fields
+    city: str
+    locality: str
+    price: float
+    price_text: Optional[str] = None
+    price_negotiable: bool
+    status: PropertyStatus
+    listing_type: ListingType
+    property_status: Optional[str] = None
+    description: Optional[str] = None
+    location_link: Optional[str] = None
+    directions: Optional[str] = None
+    builder: Optional[str] = None
+    total_acres: Optional[float] = None
+    is_featured: bool
+    is_active: bool
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    # Residential-specific fields (optional for plots)
+    property_name: Optional[str] = None
+    unit_type: Optional[UnitType] = None
+    bedrooms: Optional[int] = None
+    bathrooms: Optional[float] = None
+    buildup_area: Optional[float] = None
+    carpet_area: Optional[float] = None
+    super_built_up_area: Optional[float] = None
+    type: Optional[PropertyType] = None
+    villa_type: Optional[VillaType] = None
+    length: Optional[float] = None
+    breadth: Optional[float] = None
+    configuration: Optional[str] = None
+    total_flats: Optional[int] = None
+    total_floors: Optional[int] = None
+    # Plot-specific fields (optional for residential)
+    project_name: Optional[str] = None
+    plot_area: Optional[float] = None
+    plot_length: Optional[float] = None
+    plot_breadth: Optional[float] = None
+    price_includes_registration: Optional[bool] = None
+    # Related data
+    images: List[PropertyImageSchema] = Field(default_factory=list)
+    project_images: List[PropertyProjectImageSchema] = Field(default_factory=list)
+    floorplan_images: List[PropertyFloorplanImageSchema] = Field(default_factory=list)
+    masterplan_images: List[PropertyMasterplanImageSchema] = Field(default_factory=list)
+    features: List[PropertyFeatureSchema] = Field(default_factory=list)
+
+    @field_validator('is_featured', 'is_active', 'price_negotiable', 'price_includes_registration', mode='before')
+    @classmethod
+    def parse_bool(cls, v):
+        """Convert MySQL TINYINT(1) (0/1) to bool"""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, int):
+            return bool(v)
+        if isinstance(v, str):
+            return v.lower() in ('true', '1', 'yes', 'on')
+        return False if v is None else bool(v)
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def parse_status(cls, v):
+        """Convert status string to PropertyStatus enum - handles legacy DB values"""
+        if not v:
+            return PropertyStatus.NEW
+        if isinstance(v, PropertyStatus):
+            return v
+        if isinstance(v, str):
+            # Normalize: handle spaces, dashes, underscores, case variations
+            normalized = v.lower().replace(" ", "_").replace("-", "_").strip()
+            # Try direct match first
+            try:
+                return PropertyStatus(normalized)
+            except ValueError:
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in PropertyStatus.__members__.items():
+                    if member_name.lower() == normalized or member_value.value.lower() == normalized:
+                        return member_value
+                # Default fallback
+                return PropertyStatus.NEW
+        return PropertyStatus.NEW
+
+    @field_validator('listing_type', mode='before')
+    @classmethod
+    def parse_listing_type(cls, v):
+        """Convert listing_type string to ListingType enum"""
+        if not v:
+            return ListingType.READY_TO_MOVE
+        if isinstance(v, ListingType):
+            return v
+        if isinstance(v, str):
+            # Try direct match first
+            try:
+                return ListingType(v)
+            except ValueError:
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in ListingType.__members__.items():
+                    if member_name.lower() == v.lower() or member_value.value.lower() == v.lower():
+                        return member_value
+                # Default fallback
+                return ListingType.READY_TO_MOVE
+        return ListingType.READY_TO_MOVE
+
+    @field_validator('unit_type', mode='before')
+    @classmethod
+    def parse_unit_type(cls, v):
+        """Convert unit_type string to UnitType enum"""
+        if not v:
+            return None
+        if isinstance(v, UnitType):
+            return v
+        if isinstance(v, str):
+            # Normalize: handle spaces, dashes, underscores, case variations
+            normalized = v.lower().replace(" ", "_").replace("-", "_").strip()
+            # Try direct match first
+            try:
+                return UnitType(normalized)
+            except ValueError:
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in UnitType.__members__.items():
+                    if member_name.lower() == normalized or member_value.value.lower() == normalized:
+                        return member_value
+                # Default fallback
+                return None
+        return None
+
+    @field_validator('type', mode='before')
+    @classmethod
+    def parse_type(cls, v):
+        """Convert type string to PropertyType enum - handles legacy DB values"""
+        if not v:
+            return None
+        if isinstance(v, PropertyType):
+            return v
+        if isinstance(v, str):
+            # Normalize: handle spaces, dashes, underscores, case variations
+            normalized = v.lower().replace(" ", "_").replace("-", "_").strip()
+            # Try direct match first
+            try:
+                return PropertyType(normalized)
+            except ValueError:
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in PropertyType.__members__.items():
+                    if member_name.lower() == normalized or member_value.value.lower() == normalized:
+                        return member_value
+                # Default fallback
+                return None
+        return None
+
+    @field_validator('villa_type', mode='before')
+    @classmethod
+    def parse_villa_type(cls, v):
+        """Convert villa_type string to VillaType enum"""
+        if not v:
+            return None
+        if isinstance(v, VillaType):
+            return v
+        if isinstance(v, str):
+            # Try direct match first
+            try:
+                return VillaType(v)
+            except ValueError:
+                # Try to find in enum members (case-insensitive)
+                for member_name, member_value in VillaType.__members__.items():
+                    if member_name.lower() == v.lower() or member_value.value.lower() == v.lower():
+                        return member_value
+                # Default fallback
+                return None
+        return None
+
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"  # Allow extra fields from database
 
 
 # ============================================
