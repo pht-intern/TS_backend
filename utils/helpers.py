@@ -402,11 +402,10 @@ def require_admin_auth(f):
             if not users:
                 return error_response("Unauthorized", 401)
             
-            # Optional: Validate active session (can be enabled for stricter control)
-            # For now, we rely on login blocking, but this can be enabled if needed
-            # has_active_session, session_info = validate_active_session()
-            # if not has_active_session:
-            #     return error_response("No active session", 401)
+            # Validate active session - reject if session expired (4 hour timeout)
+            has_active_session, session_info = validate_active_session()
+            if not has_active_session:
+                return error_response("Session expired. Please log in again.", 401)
 
         except Exception:
             traceback.print_exc()

@@ -142,7 +142,8 @@ def register_auth_routes(app):
             
             # Create new session - deactivate any old sessions first
             session_id = str(uuid.uuid4())
-            expires_at = datetime.now() + timedelta(hours=24)  # 24 hour session
+            session_timeout_hours = int(os.getenv("SESSION_TIMEOUT_HOURS", "4"))
+            expires_at = datetime.now() + timedelta(hours=session_timeout_hours)
             
             try:
                 # Deactivate all existing sessions for this user (safety measure)
