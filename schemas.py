@@ -1266,7 +1266,7 @@ class FrontendStatsSchema(BaseModel):
 class LoginSchema(BaseModel):
     """Login request schema"""
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=1, description="Password (required, non-empty)")
 
 
 class LoginResponseSchema(BaseModel):

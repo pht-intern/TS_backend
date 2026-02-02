@@ -128,6 +128,12 @@ def verify_scrypt_hash_manual(password: str, hash_string: str) -> bool:
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against a hash"""
     try:
+        # Reject empty or missing plain password
+        if not plain_password or not isinstance(plain_password, str):
+            return False
+        plain_password = plain_password.strip()
+        if not plain_password:
+            return False
         # Check if hash is valid before attempting verification
         if not hashed_password or not isinstance(hashed_password, str):
             print(f"Error: Invalid hash format - hash is empty or not a string")

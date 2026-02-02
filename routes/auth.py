@@ -129,11 +129,20 @@ def register_auth_routes(app):
             
             user = users[0]
             
-            # Verify password hash matches
-            if not user.get('password_hash'):
+            # Require non-empty password
+            if not login_data.password or not str(login_data.password).strip():
+                abort_with_message(400, "Password is required")
+            
+            # Get password_hash from row (MySQL may return column names in different case)
+            stored_hash = None
+            for key, value in user.items():
+                if key and str(key).lower() == "password_hash" and value:
+                    stored_hash = value
+                    break
+            if not stored_hash or not isinstance(stored_hash, str):
                 abort_with_message(401, "Invalid email or password")
             
-            if not verify_password(login_data.password, user['password_hash']):
+            if not verify_password(login_data.password.strip(), stored_hash):
                 abort_with_message(401, "Invalid email or password")
             
             # Double-check user has admin role
