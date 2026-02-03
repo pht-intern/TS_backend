@@ -22,26 +22,20 @@ def register_auth_routes(app):
         try:
             data = request.get_json()
             if not data:
-                abort_with_message(400, "Invalid request data")
+                return abort_with_message(400, "Invalid request data")
             
             try:
                 login_data = LoginSchema(**data)
             except Exception as validation_error:
                 error_msg = str(validation_error)
                 if "email" in error_msg.lower():
-                    abort_with_message(400, "Invalid email format")
+                    return abort_with_message(400, "Invalid email format")
                 elif "password" in error_msg.lower():
-                    abort_with_message(400, "Password is required")
+                    return abort_with_message(400, "Password is required")
                 else:
-                    abort_with_message(400, f"Invalid request data: {error_msg}")
+                    return abort_with_message(400, f"Invalid request data: {error_msg}")
             
-            allowed_admin_email = os.getenv("ADMIN_EMAIL")
-            if not allowed_admin_email:
-                abort_with_message(500, "Server configuration error: ADMIN_EMAIL not set")
-            
-            if login_data.email.lower() != allowed_admin_email.lower():
-                abort_with_message(401, "Invalid email or password")
-            
+            # Allow any email; user must exist in DB with correct password (role=admin, is_active=1)
             # Test database connection before querying
             connection_test = test_connection()
             if not connection_test.get("connected", False):
@@ -49,7 +43,7 @@ def register_auth_routes(app):
                 print(f"Database connection test failed during login: {error_msg}")
                 print(f"Connection details: {connection_test.get('details', {})}")
                 suggestion = connection_test.get("suggestion", "Please check database configuration in cPanel.")
-                abort_with_message(500, f"Database connection failed: {error_msg}. {suggestion}")
+                return abort_with_message(500, f"Database connection failed: {error_msg}. {suggestion}")
             
             # CRITICAL: Check for active sessions - only one session allowed at a time
             ip_address = get_client_ip()
@@ -71,7 +65,7 @@ def register_auth_routes(app):
                     
                     # Block login if there's already an active session
                     # Even if it's the same IP, we only allow one session
-                    abort_with_message(403, f"Another session is already active. Only one user can be logged in at a time. Active session from IP: {active_ip}")
+                    return abort_with_message(403, f"Another session is already active. Only one user can be logged in at a time. Active session from IP: {active_ip}")
             except Exception as session_check_error:
                 # If table doesn't exist, create it and continue
                 error_msg = str(session_check_error).lower()
@@ -111,27 +105,29 @@ def register_auth_routes(app):
             try:
                 user_query = "SELECT * FROM users WHERE email = %s AND is_active = 1 AND role = 'admin'"
                 users = execute_query(user_query, (login_data.email,))
+                print(f"Login: DB lookup for email '{login_data.email}' -> {len(users) if users else 0} user(s)")
             except Exception as db_error:
                 error_msg = str(db_error)
                 print(f"Database query error during login: {error_msg}")
                 traceback.print_exc()
                 if "Access denied" in error_msg or "(1045" in error_msg:
-                    abort_with_message(500, "Database authentication failed. Please verify DB_USER and DB_PASSWORD in cPanel environment variables.")
+                    return abort_with_message(500, "Database authentication failed. Please verify DB_USER and DB_PASSWORD in cPanel environment variables.")
                 elif "Can't connect" in error_msg or "Connection refused" in error_msg:
-                    abort_with_message(500, "Cannot connect to database server. Please verify DB_HOST in cPanel environment variables.")
+                    return abort_with_message(500, "Cannot connect to database server. Please verify DB_HOST in cPanel environment variables.")
                 elif "Unknown database" in error_msg:
-                    abort_with_message(500, "Database not found. Please verify DB_NAME in cPanel environment variables.")
+                    return abort_with_message(500, "Database not found. Please verify DB_NAME in cPanel environment variables.")
                 else:
-                    abort_with_message(500, f"Database error during login: {error_msg}")
+                    return abort_with_message(500, f"Database error during login: {error_msg}")
             
             if not users or len(users) == 0:
-                abort_with_message(401, "Invalid email or password")
+                print(f"Login 401 (user not in DB): no user with email '{login_data.email}', role=admin, is_active=1")
+                return abort_with_message(401, "Invalid email or password")
             
             user = users[0]
             
             # Require non-empty password
             if not login_data.password or not str(login_data.password).strip():
-                abort_with_message(400, "Password is required")
+                return abort_with_message(400, "Password is required")
             
             # Get password_hash from row (MySQL may return column names in different case)
             stored_hash = None
@@ -140,14 +136,15 @@ def register_auth_routes(app):
                     stored_hash = value
                     break
             if not stored_hash or not isinstance(stored_hash, str):
-                abort_with_message(401, "Invalid email or password")
+                return abort_with_message(401, "Invalid email or password")
             
             if not verify_password(login_data.password.strip(), stored_hash):
-                abort_with_message(401, "Invalid email or password")
+                print(f"Login 401 (password mismatch): email '{login_data.email}'")
+                return abort_with_message(401, "Invalid email or password")
             
             # Double-check user has admin role
             if user.get('role') != 'admin':
-                abort_with_message(403, "Access denied: Admin role required")
+                return abort_with_message(403, "Access denied: Admin role required")
             
             # Create new session - deactivate any old sessions first
             session_id = str(uuid.uuid4())
@@ -222,7 +219,8 @@ def register_auth_routes(app):
                     "id": user['id'],
                     "email": user['email'],
                     "full_name": user.get('full_name'),
-                    "role": user.get('role', 'admin')
+                    "role": user.get('role', 'admin'),
+                    "is_admin": bool(user.get('is_admin', 0))
                 }
             )
             return jsonify(response_data.model_dump())
@@ -231,33 +229,23 @@ def register_auth_routes(app):
             if "Database engine not initialized" in error_msg or "Check environment variables" in error_msg:
                 print(f"Database configuration error during login: {error_msg}")
                 traceback.print_exc()
-                abort_with_message(500, "Database not configured. Please check environment variables in cPanel.")
+                return abort_with_message(500, "Database not configured. Please check environment variables in cPanel.")
             else:
                 print(f"Database runtime error during login: {error_msg}")
                 traceback.print_exc()
-                abort_with_message(500, f"Database error: {error_msg}")
-        except RuntimeError as e:
-            error_msg = str(e)
-            if "Database engine not initialized" in error_msg or "Check environment variables" in error_msg:
-                print(f"Database configuration error during login: {error_msg}")
-                traceback.print_exc()
-                abort_with_message(500, "Database not configured. Please check environment variables in cPanel.")
-            else:
-                print(f"Database runtime error during login: {error_msg}")
-                traceback.print_exc()
-                abort_with_message(500, f"Database error: {error_msg}")
+                return abort_with_message(500, f"Database error: {error_msg}")
         except Exception as e:
             error_msg = str(e)
             print(f"Login error: {error_msg}")
             traceback.print_exc()
             if "Access denied" in error_msg or "(1045" in error_msg:
-                abort_with_message(500, "Database authentication failed. Please verify DB_USER and DB_PASSWORD in cPanel environment variables.")
+                return abort_with_message(500, "Database authentication failed. Please verify DB_USER and DB_PASSWORD in cPanel environment variables.")
             elif "Can't connect" in error_msg or "Connection refused" in error_msg:
-                abort_with_message(500, "Cannot connect to database server. Please verify DB_HOST in cPanel environment variables.")
+                return abort_with_message(500, "Cannot connect to database server. Please verify DB_HOST in cPanel environment variables.")
             elif "Unknown database" in error_msg:
-                abort_with_message(500, "Database not found. Please verify DB_NAME in cPanel environment variables.")
+                return abort_with_message(500, "Database not found. Please verify DB_NAME in cPanel environment variables.")
             else:
-                abort_with_message(500, f"An error occurred during login: {error_msg}")
+                return abort_with_message(500, f"An error occurred during login: {error_msg}")
     
     @app.route("/api/auth/logout", methods=["POST"])
     def logout():

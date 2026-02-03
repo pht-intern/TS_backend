@@ -21,7 +21,7 @@ else:
 from database import (
     init_db_pool, test_connection, execute_update
 )
-from utils.setup import setup_admin_user
+from utils.setup import setup_admin_user, add_image_title_column_if_missing
 from utils.helpers import get_client_ip
 
 print("App imported")
@@ -102,6 +102,7 @@ def startup_tasks():
         if test_connection():
             print("Database connection successful!")
             setup_admin_user()
+            add_image_title_column_if_missing()
             # Create application_metrics table if it doesn't exist
             try:
                 create_app_metrics_table = """

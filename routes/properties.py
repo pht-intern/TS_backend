@@ -248,6 +248,12 @@ def register_properties_routes(app):
                 if 'area' in prop_dict and prop_dict['area'] is not None:
                     prop_dict['area'] = int(float(prop_dict['area']))
                 
+                # Serialize created_at and updated_at from database for API response
+                if 'created_at' in prop_dict and isinstance(prop_dict['created_at'], datetime):
+                    prop_dict['created_at'] = prop_dict['created_at'].isoformat()
+                if 'updated_at' in prop_dict and isinstance(prop_dict['updated_at'], datetime):
+                    prop_dict['updated_at'] = prop_dict['updated_at'].isoformat()
+                
                 normalized_properties.append(prop_dict)
             
             response = PaginatedResponse(
@@ -502,11 +508,11 @@ def register_properties_routes(app):
                                 "masterplan": "masterplan"
                             }
                             db_category = category_map.get(image_category, "project")
-                            
+                            image_title = (gallery_item.get("title") or "").strip() or ""
                             # Insert into property images table
                             execute_insert(
-                                f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
-                                (property_id, final_url, db_category, idx)
+                                f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order, image_title) VALUES (%s, %s, %s, %s, %s)",
+                                (property_id, final_url, db_category, idx, image_title)
                             )
                 except Exception as img_err:
                     print(f"Warning: could not insert gallery images for property {property_id}: {img_err}")
@@ -614,6 +620,19 @@ def register_properties_routes(app):
                 return error_response("Property not found", 404)
             
             property_data = dict(properties[0])
+            row = properties[0]
+
+            # Serialize created_at and updated_at from database for API response (for frontend "Listed on" display)
+            if 'created_at' in property_data and property_data['created_at'] is not None:
+                if isinstance(property_data['created_at'], datetime):
+                    property_data['created_at'] = property_data['created_at'].isoformat()
+            else:
+                # Ensure created_at from DB is always included when available
+                created_at_val = row.get('created_at')
+                if created_at_val is not None:
+                    property_data['created_at'] = created_at_val.isoformat() if isinstance(created_at_val, datetime) else created_at_val
+            if 'updated_at' in property_data and isinstance(property_data['updated_at'], datetime):
+                property_data['updated_at'] = property_data['updated_at'].isoformat()
 
             # Provide `direction` alias for frontend dropdown prefill.
             # Keep `directions` unchanged for backward compatibility.
@@ -637,22 +656,42 @@ def register_properties_routes(app):
                 else:
                     property_data['location'] = 'Location not specified'
             
-            # Get images (wrap in try/except – some image tables may not exist)
+            # Get images (wrap in try/except – some image tables may not exist; image_title column may not exist yet)
             normalized_images = []
             try:
                 if property_category == 'residential':
                     images_query = """
+                        SELECT id, property_id, image_url, image_category as image_type, image_order,
+                        COALESCE(image_title, '') as image_title, created_at
+                        FROM residential_property_images
+                        WHERE property_id = %s
+                    """
+                    images_query_no_title = """
                         SELECT id, property_id, image_url, image_category as image_type, image_order, created_at
                         FROM residential_property_images
                         WHERE property_id = %s
                     """
                 else:
                     images_query = """
+                        SELECT id, property_id, image_url, image_category as image_type, image_order,
+                        COALESCE(image_title, '') as image_title, created_at
+                        FROM plot_property_images
+                        WHERE property_id = %s
+                    """
+                    images_query_no_title = """
                         SELECT id, property_id, image_url, image_category as image_type, image_order, created_at
                         FROM plot_property_images
                         WHERE property_id = %s
                     """
-                images = execute_query(images_query, (property_id,))
+                try:
+                    images = execute_query(images_query, (property_id,))
+                except Exception as col_err:
+                    if "image_title" in str(col_err) or "1054" in str(col_err):
+                        images = execute_query(images_query_no_title, (property_id,))
+                        for img in images:
+                            img['image_title'] = ''
+                    else:
+                        raise
                 images = sorted(images, key=lambda x: (x.get('image_order') if x.get('image_order') is not None else 0, str(x.get('created_at') or '')))
                 for i, img in enumerate(images):
                     img_dict = dict(img)
@@ -663,6 +702,8 @@ def register_properties_routes(app):
                         img_dict['created_at'] = img_dict['created_at'].isoformat()
                     img_dict['is_primary'] = (i == 0)
                     img_dict['image_order'] = img_dict.get('image_order') if img_dict.get('image_order') is not None else i
+                    if 'image_title' not in img_dict:
+                        img_dict['image_title'] = ''
                     normalized_images.append(img_dict)
             except Exception as img_err:
                 print(f"Warning: could not load images for property {property_id}: {img_err}")
@@ -682,7 +723,7 @@ def register_properties_routes(app):
                 image_gallery.append({
                     'image_url': img.get('image_url'),
                     'category': frontend_category,
-                    'title': '',  # Images don't have titles in DB yet
+                    'title': (img.get('image_title') or '').strip() or '',
                     'order': img.get('image_order', 0)
                 })
             property_data['image_gallery'] = image_gallery
@@ -951,11 +992,11 @@ def register_properties_routes(app):
                                 "masterplan": "masterplan"
                             }
                             db_category = category_map.get(image_category, "project")
-                            
+                            image_title = (gallery_item.get("title") or "").strip() or ""
                             # Insert into property images table
                             execute_update(
-                                f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
-                                (property_id, final_url, db_category, idx)
+                                f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order, image_title) VALUES (%s, %s, %s, %s, %s)",
+                                (property_id, final_url, db_category, idx, image_title)
                             )
                 except Exception as img_err:
                     print(f"Warning: could not update gallery images for property {property_id}: {img_err}")

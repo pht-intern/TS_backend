@@ -169,3 +169,19 @@ def setup_admin_user():
         print(f"  Admin user configured - Email: {email}")
     except Exception as e:
         print(f"Error setting up admin user: {str(e)}")
+
+
+def add_image_title_column_if_missing():
+    """Add image_title column to property image tables for existing databases (e.g. cPanel)."""
+    for table in ("residential_property_images", "plot_property_images"):
+        try:
+            execute_update(
+                f"ALTER TABLE {table} ADD COLUMN image_title VARCHAR(500) NULL DEFAULT '' "
+                "COMMENT 'Display title for gallery' AFTER image_order"
+            )
+            print(f"  Added image_title to {table}")
+        except Exception as e:
+            if "Duplicate column name" in str(e) or "1060" in str(e):
+                pass  # Column already exists
+            else:
+                print(f"Note: Could not add image_title to {table}: {e}")
