@@ -318,22 +318,33 @@ def abort_with_message(code: int, message: str):
 # ==========================================================
 # SESSION VALIDATION
 # ==========================================================
-def validate_active_session():
+def validate_active_session(user_email=None):
     """
-    Check if there's an active session in the database.
+    Check if there's an active session in the database for the given user.
+    If user_email is provided, only that user's session is valid (fixes logic mismatch:
+    frontend thought session expired because we validated "any" session, not this user's).
     Returns (is_valid, session_info) tuple.
-    If no active session exists, returns (False, None).
     """
     try:
-        active_session_query = """
-            SELECT * FROM user_sessions 
-            WHERE is_active = 1 
-            AND expires_at > NOW()
-            ORDER BY created_at DESC
-            LIMIT 1
-        """
-        active_sessions = execute_query(active_session_query)
-        
+        if user_email:
+            active_session_query = """
+                SELECT * FROM user_sessions
+                WHERE is_active = 1
+                AND expires_at > NOW()
+                AND LOWER(TRIM(user_email)) = LOWER(TRIM(%s))
+                ORDER BY created_at DESC
+                LIMIT 1
+            """
+            active_sessions = execute_query(active_session_query, (user_email,))
+        else:
+            active_session_query = """
+                SELECT * FROM user_sessions
+                WHERE is_active = 1
+                AND expires_at > NOW()
+                ORDER BY created_at DESC
+                LIMIT 1
+            """
+            active_sessions = execute_query(active_session_query)
         if active_sessions and len(active_sessions) > 0:
             active_session = active_sessions[0]
             return (True, {
@@ -344,68 +355,62 @@ def validate_active_session():
                 "created_at": active_session.get('created_at'),
                 "expires_at": active_session.get('expires_at')
             })
-        else:
-            return (False, None)
+        return (False, None)
     except Exception as e:
-        # If table doesn't exist or error, return no active session
         error_msg = str(e).lower()
         if "table" in error_msg and ("doesn't exist" in error_msg or "unknown table" in error_msg):
             return (False, None)
-        # Log error but don't block - let the request continue
         print(f"Warning: Error validating session: {str(e)}")
         return (False, None)
 
 
 # ==========================================================
-# ADMIN AUTH DECORATOR (FINAL & SAFE)
+# ADMIN AUTH DECORATOR — Role-based from DB (no email allowlist)
+# 401 = unauthenticated / session expired | 403 = forbidden (not admin)
 # ==========================================================
 def require_admin_auth(f):
     from functools import wraps
 
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # Allow OPTIONS requests for CORS preflight without authentication
         if request.method == "OPTIONS":
             return f(*args, **kwargs)
-        
-        allowed_admin_email = os.getenv("ADMIN_EMAIL")
-        if not allowed_admin_email:
-            return error_response("Server configuration error", 500)
 
         auth_email = request.headers.get("X-Admin-Email") or request.headers.get("Authorization")
-
         if auth_email and auth_email.startswith("Email "):
             auth_email = auth_email.replace("Email ", "")
-
         if not auth_email:
+            print("AUTH CHECK FAIL: no X-Admin-Email or Authorization header")
             return error_response("Unauthorized", 401)
 
         auth_email = auth_email.lower().strip()
-        allowed_admin_email = allowed_admin_email.lower().strip()
-
-        if auth_email != allowed_admin_email:
-            return error_response("Unauthorized", 401)
 
         try:
             if not test_connection().get("connected"):
                 return error_response("Database unavailable", 500)
 
+            # Look up user by email only; role check is below (403 if not admin)
             user_query = """
-                SELECT id
+                SELECT id, role
                 FROM users
-                WHERE email = %s
-                  AND role = 'admin'
+                WHERE LOWER(TRIM(email)) = %s
                   AND is_active = 1
                 LIMIT 1
             """
             users = execute_query(user_query, (auth_email,))
             if not users:
+                print("AUTH CHECK FAIL: user not in DB or inactive", "auth_email:", auth_email)
                 return error_response("Unauthorized", 401)
-            
-            # Validate active session - reject if session expired (4 hour timeout)
-            has_active_session, session_info = validate_active_session()
+
+            if (users[0].get("role") or "").lower().strip() != "admin":
+                print("AUTH CHECK FAIL: user is not admin (403)", "auth_email:", auth_email, "role:", users[0].get("role"))
+                return error_response("Forbidden. Admin access required.", 403)
+
+            has_active_session, session_info = validate_active_session(auth_email)
             if not has_active_session:
+                print("AUTH CHECK FAIL: no active session", "auth_email:", auth_email)
                 return error_response("Session expired. Please log in again.", 401)
+            print("AUTH CHECK OK:", auth_email)
 
         except Exception:
             traceback.print_exc()

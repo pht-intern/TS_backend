@@ -3,7 +3,7 @@ API Schemas for Tirumakudalu Properties
 Pydantic schemas for API request/response validation
 """
 
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import datetime
 import json
 from pydantic import BaseModel, Field, EmailStr, HttpUrl, field_serializer, field_validator
@@ -812,6 +812,184 @@ class PlotPropertyResponseSchema(BaseModel):
     class Config:
         from_attributes = True
         extra = "allow"  # Allow extra fields from database
+
+
+# ============================================
+# COMMERCIAL PROPERTY SCHEMAS
+# Office Space, Showrooms, Warehouse
+# ============================================
+
+CommercialPropertyType = Literal["office_space", "warehouse", "showrooms"]
+WarehouseTypeLiteral = Literal["cold_storage", "industrial", "logistic"]
+
+
+class CommercialPropertyCreateSchema(BaseModel):
+    """Schema for creating a commercial property (Office Space, Showrooms, Warehouse)"""
+    city: str = Field(..., max_length=250)
+    locality: str = Field(..., max_length=250)
+    property_name: str = Field(..., max_length=250)
+    property_type: CommercialPropertyType = Field(..., description="office_space, warehouse, or showrooms")
+    price: float = Field(..., ge=0)
+    price_text: Optional[str] = Field(None, max_length=500, description="Original price text")
+    price_negotiable: bool = False
+    status: str = Field(..., description="sale or rent")
+    listing_type: Optional[str] = Field(None, max_length=50)
+    property_status: Optional[str] = Field(None, max_length=50)
+    description: Optional[str] = None
+    location_link: Optional[str] = Field(None, description="Google Maps location link")
+    directions: Optional[str] = Field(None, description="Directions to the property")
+    # Common area fields
+    super_buildup_area: Optional[float] = Field(None, ge=0, description="Super built-up area in sq.ft.")
+    carpet_area: Optional[float] = Field(None, ge=0, description="Carpet area in sq.ft.")
+    plot_area: Optional[float] = Field(None, ge=0, description="Plot area in sq.ft.")
+    # Office Space specific
+    total_floors: Optional[int] = Field(None, ge=0)
+    floor_number: Optional[int] = Field(None, ge=0)
+    total_seats_workstations: Optional[int] = Field(None, ge=0)
+    number_of_cabins: Optional[int] = Field(None, ge=0)
+    number_of_parking_slots: Optional[int] = Field(None, ge=0)
+    parking_options: Optional[List[str]] = Field(default=None, description="e.g. reserved_parking, visitors_parking")
+    # Showrooms specific
+    frontage_width: Optional[float] = Field(None, ge=0)
+    frontage_unit: Optional[str] = Field(None, max_length=10, description="ft or m")
+    footfall_potential: Optional[str] = Field(None, max_length=20, description="low, medium, high")
+    ground_floor_area: Optional[float] = Field(None, ge=0)
+    ceiling_height: Optional[float] = Field(None, ge=0)
+    mezzanine_area: Optional[float] = Field(None, ge=0)
+    # Warehouse specific
+    warehouse_type: Optional[WarehouseTypeLiteral] = Field(None, description="cold_storage, industrial, logistic")
+    clearance_height: Optional[float] = Field(None, ge=0)
+    clearance_height_unit: Optional[str] = Field(None, max_length=10, description="ft or m")
+    dock_levelers: Optional[int] = Field(None, ge=0)
+    number_of_shutters: Optional[int] = Field(None, ge=0)
+    shutter_height: Optional[float] = Field(None, ge=0)
+    shutter_height_unit: Optional[str] = Field(None, max_length=10, description="ft or m")
+    floor_load_capacity: Optional[float] = Field(None, ge=0, description="Kg/Sq ft")
+    # Metadata and related
+    is_featured: bool = False
+    is_active: bool = True
+    images: Optional[List[dict]] = Field(default=[], description="List of image objects with url, title, category")
+    features: Optional[List[str]] = Field(default=[], description="Amenities/features list")
+
+
+class CommercialPropertyUpdateSchema(BaseModel):
+    """Schema for updating a commercial property (all fields optional)"""
+    city: Optional[str] = Field(None, max_length=250)
+    locality: Optional[str] = Field(None, max_length=250)
+    property_name: Optional[str] = Field(None, max_length=250)
+    property_type: Optional[CommercialPropertyType] = None
+    price: Optional[float] = Field(None, ge=0)
+    price_text: Optional[str] = Field(None, max_length=500)
+    price_negotiable: Optional[bool] = None
+    status: Optional[str] = None
+    listing_type: Optional[str] = Field(None, max_length=50)
+    property_status: Optional[str] = Field(None, max_length=50)
+    description: Optional[str] = None
+    location_link: Optional[str] = None
+    directions: Optional[str] = None
+    super_buildup_area: Optional[float] = Field(None, ge=0)
+    carpet_area: Optional[float] = Field(None, ge=0)
+    plot_area: Optional[float] = Field(None, ge=0)
+    # Office Space
+    total_floors: Optional[int] = Field(None, ge=0)
+    floor_number: Optional[int] = Field(None, ge=0)
+    total_seats_workstations: Optional[int] = Field(None, ge=0)
+    number_of_cabins: Optional[int] = Field(None, ge=0)
+    number_of_parking_slots: Optional[int] = Field(None, ge=0)
+    parking_options: Optional[List[str]] = None
+    # Showrooms
+    frontage_width: Optional[float] = Field(None, ge=0)
+    frontage_unit: Optional[str] = Field(None, max_length=10)
+    footfall_potential: Optional[str] = Field(None, max_length=20)
+    ground_floor_area: Optional[float] = Field(None, ge=0)
+    ceiling_height: Optional[float] = Field(None, ge=0)
+    mezzanine_area: Optional[float] = Field(None, ge=0)
+    # Warehouse
+    warehouse_type: Optional[WarehouseTypeLiteral] = None
+    clearance_height: Optional[float] = Field(None, ge=0)
+    clearance_height_unit: Optional[str] = Field(None, max_length=10)
+    dock_levelers: Optional[int] = Field(None, ge=0)
+    number_of_shutters: Optional[int] = Field(None, ge=0)
+    shutter_height: Optional[float] = Field(None, ge=0)
+    shutter_height_unit: Optional[str] = Field(None, max_length=10)
+    floor_load_capacity: Optional[float] = Field(None, ge=0)
+    is_featured: Optional[bool] = None
+    is_active: Optional[bool] = None
+    images: Optional[List[dict]] = None
+    features: Optional[List[str]] = None
+
+
+class CommercialPropertyResponseSchema(BaseModel):
+    """Commercial property response schema (Office Space, Showrooms, Warehouse)"""
+    id: int
+    city: str
+    locality: str
+    property_name: str
+    property_type: str  # office_space, warehouse, showrooms
+    price: float
+    price_text: Optional[str] = None
+    price_negotiable: bool
+    status: str
+    listing_type: Optional[str] = None
+    property_status: Optional[str] = None
+    description: Optional[str] = None
+    location_link: Optional[str] = None
+    directions: Optional[str] = None
+    super_built_up_area: Optional[float] = None
+    carpet_area: Optional[float] = None
+    plot_area: Optional[float] = None
+    # Office Space
+    total_floors: Optional[int] = None
+    floor_number: Optional[int] = None
+    total_seats_workstations: Optional[int] = None
+    number_of_cabins: Optional[int] = None
+    number_of_parking_slots: Optional[int] = None
+    parking_options: Optional[List[str]] = None
+    # Showrooms
+    frontage_width: Optional[float] = None
+    frontage_unit: Optional[str] = None
+    footfall_potential: Optional[str] = None
+    ground_floor_area: Optional[float] = None
+    ceiling_height: Optional[float] = None
+    mezzanine_area: Optional[float] = None
+    # Warehouse
+    warehouse_type: Optional[str] = None
+    clearance_height: Optional[float] = None
+    clearance_height_unit: Optional[str] = None
+    dock_levelers: Optional[int] = None
+    number_of_shutters: Optional[int] = None
+    shutter_height: Optional[float] = None
+    shutter_height_unit: Optional[str] = None
+    floor_load_capacity: Optional[float] = None
+    is_featured: bool
+    is_active: bool
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    images: List[PropertyImageSchema] = Field(default_factory=list)
+    project_images: List[PropertyProjectImageSchema] = Field(default_factory=list)
+    floorplan_images: List[PropertyFloorplanImageSchema] = Field(default_factory=list)
+    masterplan_images: List[PropertyMasterplanImageSchema] = Field(default_factory=list)
+    features: List[PropertyFeatureSchema] = Field(default_factory=list)
+
+    @field_validator("is_featured", "is_active", "price_negotiable", mode="before")
+    @classmethod
+    def parse_bool(cls, v):
+        """Convert MySQL TINYINT(1) (0/1) to bool"""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, int):
+            return bool(v)
+        if isinstance(v, str):
+            return v.lower() in ("true", "1", "yes", "on")
+        return False if v is None else bool(v)
+
+    @field_serializer("created_at", "updated_at")
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+        extra = "allow"
 
 
 # ============================================

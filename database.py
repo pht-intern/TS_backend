@@ -362,10 +362,12 @@ def execute_update(query: str, params: tuple = None) -> int:
             if raw_conn:
                 raw_conn.rollback()
             error_msg = str(e)
+            # Duplicate column (1060) is harmless when running migrations – column already exists; don't log
+            if "Duplicate column name" in error_msg or "1060" in error_msg:
+                raise e
             print(f"❌ DATABASE UPDATE ERROR: {error_msg}")
             print(f"❌ QUERY: {query[:500]}")  # Truncate long queries
             print(f"❌ PARAMS: {sanitized_params}")
-            
             # Provide helpful error messages for common MySQL errors
             if "Column" in error_msg and "cannot be null" in error_msg:
                 print("💡 TIP: A NOT NULL column received NULL. Check your data sanitization.")
@@ -377,7 +379,6 @@ def execute_update(query: str, params: tuple = None) -> int:
                 print("💡 TIP: Foreign key constraint violation. Check that referenced ID exists.")
             elif "Invalid JSON" in error_msg or "JSON text" in error_msg:
                 print("💡 TIP: Invalid JSON sent to JSON column. Use json.dumps() for Python objects.")
-            
             import traceback
             traceback.print_exc()
             raise e

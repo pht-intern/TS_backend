@@ -28,17 +28,20 @@ def register_stats_routes(app):
             return response
         
         try:
-            # Query both residential_properties and plot_properties
-            query = f"""
+            # Query residential_properties, plot_properties, and commercial_properties.
+            # Normalize status: residential uses 'sell'/'new', plot/commercial use 'sale'/'rent'
+            query = """
                 SELECT 
                     COUNT(*) as total,
-                    SUM(CASE WHEN status = '{PropertyStatus.SELL.value}' THEN 1 ELSE 0 END) as for_sale,
-                    SUM(CASE WHEN status = '{PropertyStatus.NEW.value}' THEN 1 ELSE 0 END) as for_rent,
+                    SUM(CASE WHEN status IN ('sell', 'sale') THEN 1 ELSE 0 END) as for_sale,
+                    SUM(CASE WHEN status IN ('new', 'rent') THEN 1 ELSE 0 END) as for_rent,
                     SUM(CASE WHEN is_featured = 1 THEN 1 ELSE 0 END) as featured
                 FROM (
                     SELECT status, is_featured FROM residential_properties WHERE is_active = 1
                     UNION ALL
                     SELECT status, is_featured FROM plot_properties WHERE is_active = 1
+                    UNION ALL
+                    SELECT status, is_featured FROM commercial_properties WHERE is_active = 1
                 ) as combined
             """
             
@@ -54,11 +57,12 @@ def register_stats_routes(app):
                 for_rent = int(stats_result[0].get('for_rent', 0) or 0)
                 featured = int(stats_result[0].get('featured', 0) or 0)
             
-            # Get type breakdown from both tables
+            # Get type breakdown from residential, plot, and commercial tables
             by_type = {}
             try:
                 type_stats_res = execute_query("SELECT type, COUNT(*) as count FROM residential_properties WHERE is_active = 1 GROUP BY type")
                 type_stats_plot = execute_query("SELECT 'plot' as type, COUNT(*) as count FROM plot_properties WHERE is_active = 1")
+                type_stats_com = execute_query("SELECT property_type as type, COUNT(*) as count FROM commercial_properties WHERE is_active = 1 GROUP BY property_type")
                 
                 if type_stats_res:
                     for row in type_stats_res:
@@ -71,6 +75,13 @@ def register_stats_routes(app):
                     for row in type_stats_plot:
                         if row and row.get('count', 0) > 0:
                             by_type['plot'] = by_type.get('plot', 0) + int(row.get('count', 0))
+                
+                if type_stats_com:
+                    for row in type_stats_com:
+                        if row and row.get('type') is not None:
+                            type_name = str(row.get('type', ''))
+                            count_val = row.get('count', 0)
+                            by_type[type_name] = by_type.get(type_name, 0) + int(count_val or 0)
             except Exception as e:
                 print(f"Error fetching property types: {str(e)}")
             
@@ -223,10 +234,10 @@ def register_stats_routes(app):
                     print(f"Warning: Error executing count query: {query[:100]}... Error: {str(e)}")
                     return 0
             
-            # Count properties from both tables - Guard: Handle missing tables gracefully
-            total_properties = get_count("SELECT COUNT(*) as count FROM (SELECT id FROM residential_properties UNION ALL SELECT id FROM plot_properties) as combined")
-            active_properties = get_count("SELECT COUNT(*) as count FROM (SELECT id FROM residential_properties WHERE is_active = 1 UNION ALL SELECT id FROM plot_properties WHERE is_active = 1) as combined")
-            featured_properties = get_count("SELECT COUNT(*) as count FROM (SELECT id FROM residential_properties WHERE is_featured = 1 UNION ALL SELECT id FROM plot_properties WHERE is_featured = 1) as combined")
+            # Count properties from residential, plot, and commercial tables - Guard: Handle missing tables gracefully
+            total_properties = get_count("SELECT COUNT(*) as count FROM (SELECT id FROM residential_properties UNION ALL SELECT id FROM plot_properties UNION ALL SELECT id FROM commercial_properties) as combined")
+            active_properties = get_count("SELECT COUNT(*) as count FROM (SELECT id FROM residential_properties WHERE is_active = 1 UNION ALL SELECT id FROM plot_properties WHERE is_active = 1 UNION ALL SELECT id FROM commercial_properties WHERE is_active = 1) as combined")
+            featured_properties = get_count("SELECT COUNT(*) as count FROM (SELECT id FROM residential_properties WHERE is_featured = 1 UNION ALL SELECT id FROM plot_properties WHERE is_featured = 1 UNION ALL SELECT id FROM commercial_properties WHERE is_featured = 1) as combined")
             
             # Guard: Handle tables that might not exist
             total_partners = get_count("SELECT COUNT(*) as count FROM partners")
@@ -264,7 +275,20 @@ def register_stats_routes(app):
             except Exception as e:
                 print(f"Warning: Error fetching plot property type stats: {str(e)}")
             
-            # Get status stats from both tables - Guard: Handle empty results and NULL values
+            try:
+                type_stats_com = execute_query("SELECT property_type as type, COUNT(*) as count FROM commercial_properties GROUP BY property_type")
+                if type_stats_com:
+                    for row in type_stats_com:
+                        if row and 'type' in row and 'count' in row:
+                            count_val = row['count']
+                            if isinstance(count_val, Decimal):
+                                count_val = int(count_val)
+                            t = row['type']
+                            properties_by_type[t] = properties_by_type.get(t, 0) + (int(count_val) if count_val is not None else 0)
+            except Exception as e:
+                print(f"Warning: Error fetching commercial property type stats: {str(e)}")
+            
+            # Get status stats from residential, plot, and commercial tables - Guard: Handle empty results and NULL values
             properties_by_status = {}
             try:
                 # Handle NULL status values by using COALESCE
@@ -276,6 +300,8 @@ def register_stats_routes(app):
                         SELECT status FROM residential_properties 
                         UNION ALL 
                         SELECT status FROM plot_properties
+                        UNION ALL 
+                        SELECT status FROM commercial_properties
                     ) as combined 
                     GROUP BY COALESCE(status, 'unknown')
                 """)

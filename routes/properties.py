@@ -5,6 +5,7 @@ from flask import request, jsonify, current_app, make_response
 from datetime import datetime
 from decimal import Decimal
 import traceback
+import json
 from database import execute_query, execute_update, execute_insert
 from models import PropertyType, PropertyStatus
 from schemas import PaginatedResponse
@@ -111,10 +112,35 @@ def register_properties_routes(app):
             residential_where = where_clause
             plot_where = " AND ".join([c for i, c in enumerate(conditions) if i != type_filter_index]) if type_filter_index is not None else where_clause
             
-            # Get total count from both tables
+            # Commercial: build conditions (no "type" column; use property_type if filter matches)
+            conditions_com = ["is_active = %s"]
+            params_com = [is_active_int]
+            if type_str and type_str in ("office_space", "warehouse", "showrooms"):
+                conditions_com.append("property_type = %s")
+                params_com.append(type_str)
+            if min_price is not None:
+                conditions_com.append("price >= %s")
+                params_com.append(min_price)
+            if max_price is not None:
+                conditions_com.append("price <= %s")
+                params_com.append(max_price)
+            if location:
+                conditions_com.append("(LOWER(city) LIKE %s OR LOWER(locality) LIKE %s)")
+                params_com.append(f"%{location.lower()}%")
+                params_com.append(f"%{location.lower()}%")
+            if is_featured is not None:
+                conditions_com.append("is_featured = %s")
+                params_com.append(1 if is_featured else 0)
+            commercial_where = " AND ".join(conditions_com)
+
+            # Get total count from all three tables
             count_res = execute_query(f"SELECT COUNT(*) as total FROM residential_properties WHERE {residential_where}", tuple(residential_params)) if residential_where else [{'total': 0}]
             count_plot = execute_query(f"SELECT COUNT(*) as total FROM plot_properties WHERE {plot_where}", tuple(plot_params)) if plot_where else [{'total': 0}]
-            total = (count_res[0]['total'] if count_res else 0) + (count_plot[0]['total'] if count_plot else 0)
+            try:
+                count_com = execute_query(f"SELECT COUNT(*) as total FROM commercial_properties WHERE {commercial_where}", tuple(params_com))
+            except Exception:
+                count_com = [{'total': 0}]
+            total = (count_res[0]['total'] if count_res else 0) + (count_plot[0]['total'] if count_plot else 0) + (count_com[0]['total'] if count_com else 0)
             
             # Query both tables separately and combine results
             import time
@@ -162,9 +188,35 @@ def register_properties_routes(app):
                     ORDER BY created_at DESC
                 """
                 plot_props = execute_query(plot_query, tuple(plot_params)) if plot_where else []
-            
+
+            # Query commercial properties
+            commercial_props = []
+            try:
+                commercial_query = f"""
+                    SELECT
+                        id, city, locality, property_name as title, property_name,
+                        NULL as unit_type, 0 as bedrooms, 0 as bathrooms,
+                        COALESCE(super_built_up_area, 0) as area, NULL as buildup_area, carpet_area,
+                        super_built_up_area, price, price_text, price_negotiable,
+                        property_type as type, status, property_status, description,
+                        location_link, directions, NULL as length, NULL as breadth,
+                        NULL as builder, NULL as configuration, NULL as total_flats, total_floors, NULL as total_acres,
+                        is_featured, is_active, created_at, updated_at,
+                        'commercial' as property_category,
+                        plot_area, NULL as plot_length, NULL as plot_breadth,
+                        property_name as project_name,
+                        property_type,
+                        NULL as price_includes_registration
+                    FROM commercial_properties
+                    WHERE {commercial_where}
+                    ORDER BY created_at DESC
+                """
+                commercial_props = execute_query(commercial_query, tuple(params_com))
+            except Exception as e:
+                print(f"Warning: could not query commercial_properties: {e}")
+
             # Combine and sort by created_at
-            all_properties = residential_props + plot_props
+            all_properties = residential_props + plot_props + commercial_props
             all_properties.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
             
             # Apply pagination
@@ -189,6 +241,14 @@ def register_properties_routes(app):
                             primary_image_query = """
                                 SELECT image_url 
                                 FROM residential_property_images
+                                WHERE property_id = %s
+                                ORDER BY created_at ASC, image_order ASC 
+                                LIMIT 1
+                            """
+                        elif property_category == 'commercial':
+                            primary_image_query = """
+                                SELECT image_url 
+                                FROM commercial_property_images
                                 WHERE property_id = %s
                                 ORDER BY created_at ASC, image_order ASC 
                                 LIMIT 1
@@ -294,13 +354,17 @@ def register_properties_routes(app):
                 else:
                     property_type = "plot_properties"
             
-            # Determine if it's a plot property or residential property
-            is_plot = property_type == "plot_properties"
+            # Determine if it's commercial, plot, or residential
+            is_commercial = (
+                data.get("project_category") == "commercial"
+                or property_type in ("office_space", "warehouse", "showrooms")
+            )
+            is_plot = property_type == "plot_properties" and not is_commercial
             
             # Map frontend property_type to DB type
             _type_map = {
                 "individual_house": "house",
-                "apartments": "apartment", 
+                "apartments": "apartment",
                 "villas": "villa",
                 "plot_properties": "plot"
             }
@@ -350,8 +414,7 @@ def register_properties_routes(app):
                 return None
 
             # Handle status / listing_type according to DB constraints
-            # DB status: new|sell|resell
-            # DB listing_type: Under construction|Ready to move
+            # DB status: new|sell|resell (residential/plot); sale|rent (commercial)
             _status = (
                 _normalize_db_status(data.get("listing_type"))
                 or _normalize_db_status(data.get("status"))
@@ -363,8 +426,84 @@ def register_properties_routes(app):
                 or "Ready to move"
             )
             _pstat = data.get("property_status")
-            
-            if is_plot:
+            # Commercial status: sale or rent
+            _commercial_status = (data.get("status") or "sale").strip().lower()
+            if _commercial_status not in ("sale", "rent"):
+                _commercial_status = "sale"
+
+            if is_commercial:
+                # Create commercial property (Office Space, Showrooms, Warehouse)
+                city = data.get("city")
+                locality = data.get("locality")
+                property_name = data.get("property_name")
+                if not city or not locality or not property_name:
+                    return error_response("City, locality, and property name are required", 400)
+                price = safe_float(data.get("price"), 0.0)
+                if price <= 0:
+                    return error_response("Price is required and must be greater than 0", 400)
+
+                parking_options_val = data.get("parking_options")
+                if isinstance(parking_options_val, list):
+                    parking_options_json = json.dumps(parking_options_val) if parking_options_val else None
+                elif isinstance(parking_options_val, str):
+                    parking_options_json = parking_options_val if parking_options_val.strip() else None
+                else:
+                    parking_options_json = None
+
+                insert_commercial = """
+                    INSERT INTO commercial_properties (
+                        city, locality, property_name, property_type, price, price_text, price_negotiable,
+                        status, listing_type, property_status, description, location_link, directions,
+                        super_built_up_area, carpet_area, plot_area,
+                        total_floors, floor_number, total_seats_workstations, number_of_cabins,
+                        number_of_parking_slots, parking_options,
+                        frontage_width, frontage_unit, footfall_potential, ground_floor_area,
+                        ceiling_height, mezzanine_area,
+                        warehouse_type, clearance_height, clearance_height_unit, dock_levelers,
+                        number_of_shutters, shutter_height, shutter_height_unit, floor_load_capacity,
+                        is_featured, is_active
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s
+                    )
+                """
+                property_id = execute_insert(insert_commercial, (
+                    city, locality, property_name, property_type, price, data.get("price_text"),
+                    1 if data.get("price_negotiable") else 0,
+                    _commercial_status, data.get("listing_type"), _pstat, data.get("description"),
+                    data.get("location_link"), data.get("directions"),
+                    safe_float(data.get("super_buildup_area"), None),
+                    safe_float(data.get("carpet_area"), None),
+                    safe_float(data.get("plot_area"), None),
+                    safe_int(data.get("total_floors"), None),
+                    safe_int(data.get("floor_number"), None),
+                    safe_int(data.get("total_seats_workstations"), None),
+                    safe_int(data.get("number_of_cabins"), None),
+                    safe_int(data.get("number_of_parking_slots"), None),
+                    parking_options_json,
+                    safe_float(data.get("frontage_width"), None),
+                    data.get("frontage_unit"),
+                    data.get("footfall_potential"),
+                    safe_float(data.get("ground_floor_area"), None),
+                    safe_float(data.get("ceiling_height"), None),
+                    safe_float(data.get("mezzanine_area"), None),
+                    data.get("warehouse_type"),
+                    safe_float(data.get("clearance_height"), None),
+                    data.get("clearance_height_unit"),
+                    safe_int(data.get("dock_levelers"), None),
+                    safe_int(data.get("number_of_shutters"), None),
+                    safe_float(data.get("shutter_height"), None),
+                    data.get("shutter_height_unit"),
+                    safe_float(data.get("floor_load_capacity"), None),
+                    1 if data.get("is_featured") else 0,
+                    1 if data.get("is_active", True) else 0,
+                ))
+                img_table = "commercial_property_images"
+                feature_category = "commercial"
+            elif is_plot:
                 # Create plot property
                 city = data.get("city")
                 locality = data.get("locality")
@@ -615,6 +754,37 @@ def register_properties_routes(app):
                 """
                 properties = execute_query(plot_query, (property_id,))
                 property_category = 'plot'
+
+            # If not found in plot, check commercial_properties
+            if not properties:
+                try:
+                    commercial_query = """
+                        SELECT 
+                            id, city, locality, property_name as title, property_name,
+                            NULL as unit_type, 0 as bedrooms, 0 as bathrooms,
+                            COALESCE(super_built_up_area, 0) as area, NULL as buildup_area, carpet_area,
+                            super_built_up_area, price, price_text, price_negotiable,
+                            property_type as type, status, property_status, description,
+                            location_link, directions, NULL as length, NULL as breadth,
+                            NULL as builder, NULL as configuration, NULL as total_flats, total_floors, NULL as total_acres,
+                            is_featured, is_active, created_at, updated_at,
+                            'commercial' as property_category,
+                            plot_area, NULL as plot_length, NULL as plot_breadth,
+                            property_name as project_name,
+                            property_type,
+                            NULL as price_includes_registration,
+                            floor_number, total_seats_workstations, number_of_cabins, number_of_parking_slots,
+                            parking_options, frontage_width, frontage_unit, footfall_potential,
+                            ground_floor_area, ceiling_height, mezzanine_area,
+                            warehouse_type, clearance_height, clearance_height_unit, dock_levelers,
+                            number_of_shutters, shutter_height, shutter_height_unit, floor_load_capacity
+                        FROM commercial_properties
+                        WHERE id = %s
+                    """
+                    properties = execute_query(commercial_query, (property_id,))
+                    property_category = 'commercial'
+                except Exception:
+                    properties = []
             
             if not properties:
                 return error_response("Property not found", 404)
@@ -633,6 +803,13 @@ def register_properties_routes(app):
                     property_data['created_at'] = created_at_val.isoformat() if isinstance(created_at_val, datetime) else created_at_val
             if 'updated_at' in property_data and isinstance(property_data['updated_at'], datetime):
                 property_data['updated_at'] = property_data['updated_at'].isoformat()
+
+            # Commercial: parse parking_options from JSON string if present
+            if property_category == 'commercial' and property_data.get('parking_options') and isinstance(property_data['parking_options'], str):
+                try:
+                    property_data['parking_options'] = json.loads(property_data['parking_options'])
+                except Exception:
+                    property_data['parking_options'] = []
 
             # Provide `direction` alias for frontend dropdown prefill.
             # Keep `directions` unchanged for backward compatibility.
@@ -669,6 +846,18 @@ def register_properties_routes(app):
                     images_query_no_title = """
                         SELECT id, property_id, image_url, image_category as image_type, image_order, created_at
                         FROM residential_property_images
+                        WHERE property_id = %s
+                    """
+                elif property_category == 'commercial':
+                    images_query = """
+                        SELECT id, property_id, image_url, image_category as image_type, image_order,
+                        COALESCE(image_title, '') as image_title, created_at
+                        FROM commercial_property_images
+                        WHERE property_id = %s
+                    """
+                    images_query_no_title = """
+                        SELECT id, property_id, image_url, image_category as image_type, image_order, created_at
+                        FROM commercial_property_images
                         WHERE property_id = %s
                     """
                 else:
@@ -805,12 +994,19 @@ def register_properties_routes(app):
                 img_table = "residential_property_images"
             else:
                 res = execute_query("SELECT id FROM plot_properties WHERE id = %s", (property_id,))
-                if not res:
-                    return error_response("Property not found", 404)
-                table, cat = "plot_properties", "plot"
-                feature_table = "property_features"
-                feature_category = "plot"
-                img_table = "plot_property_images"
+                if res:
+                    table, cat = "plot_properties", "plot"
+                    feature_table = "property_features"
+                    feature_category = "plot"
+                    img_table = "plot_property_images"
+                else:
+                    res = execute_query("SELECT id FROM commercial_properties WHERE id = %s", (property_id,))
+                    if not res:
+                        return error_response("Property not found", 404)
+                    table, cat = "commercial_properties", "commercial"
+                    feature_table = "property_features"
+                    feature_category = "commercial"
+                    img_table = "commercial_property_images"
             
             data = request.get_json()
             if not data:
@@ -931,6 +1127,51 @@ def register_properties_routes(app):
                 _add(sets, params, "total_flats", data.get("total_flats"), as_int=True)
                 _add(sets, params, "total_floors", data.get("total_floors"), as_int=True)
                 _add(sets, params, "total_acres", data.get("total_acres"), as_float=True)
+            elif cat == "commercial":
+                _add(sets, params, "city", data.get("city"))
+                _add(sets, params, "locality", data.get("locality"))
+                _add(sets, params, "property_name", data.get("property_name"))
+                _add(sets, params, "property_type", data.get("property_type"))
+                _add(sets, params, "price", data.get("price"), as_float=True)
+                _add(sets, params, "price_text", data.get("price_text"))
+                if "price_negotiable" in data:
+                    _add(sets, params, "price_negotiable", 1 if data.get("price_negotiable") else 0, as_int=True)
+                _add(sets, params, "status", (data.get("status") or "sale").strip().lower() if data.get("status") else None)
+                _add(sets, params, "listing_type", data.get("listing_type"))
+                _add(sets, params, "property_status", data.get("property_status"))
+                _add(sets, params, "description", data.get("description"))
+                _add(sets, params, "location_link", data.get("location_link"))
+                _add(sets, params, "directions", data.get("directions"))
+                _add(sets, params, "super_built_up_area", data.get("super_buildup_area"), as_float=True)
+                _add(sets, params, "carpet_area", data.get("carpet_area"), as_float=True)
+                _add(sets, params, "plot_area", data.get("plot_area"), as_float=True)
+                _add(sets, params, "total_floors", data.get("total_floors"), as_int=True)
+                _add(sets, params, "floor_number", data.get("floor_number"), as_int=True)
+                _add(sets, params, "total_seats_workstations", data.get("total_seats_workstations"), as_int=True)
+                _add(sets, params, "number_of_cabins", data.get("number_of_cabins"), as_int=True)
+                _add(sets, params, "number_of_parking_slots", data.get("number_of_parking_slots"), as_int=True)
+                if "parking_options" in data:
+                    po = data.get("parking_options")
+                    sets.append("parking_options = %s")
+                    params.append(json.dumps(po) if isinstance(po, list) and po else (po if isinstance(po, str) and po else None))
+                _add(sets, params, "frontage_width", data.get("frontage_width"), as_float=True)
+                _add(sets, params, "frontage_unit", data.get("frontage_unit"))
+                _add(sets, params, "footfall_potential", data.get("footfall_potential"))
+                _add(sets, params, "ground_floor_area", data.get("ground_floor_area"), as_float=True)
+                _add(sets, params, "ceiling_height", data.get("ceiling_height"), as_float=True)
+                _add(sets, params, "mezzanine_area", data.get("mezzanine_area"), as_float=True)
+                _add(sets, params, "warehouse_type", data.get("warehouse_type"))
+                _add(sets, params, "clearance_height", data.get("clearance_height"), as_float=True)
+                _add(sets, params, "clearance_height_unit", data.get("clearance_height_unit"))
+                _add(sets, params, "dock_levelers", data.get("dock_levelers"), as_int=True)
+                _add(sets, params, "number_of_shutters", data.get("number_of_shutters"), as_int=True)
+                _add(sets, params, "shutter_height", data.get("shutter_height"), as_float=True)
+                _add(sets, params, "shutter_height_unit", data.get("shutter_height_unit"))
+                _add(sets, params, "floor_load_capacity", data.get("floor_load_capacity"), as_float=True)
+                if "is_featured" in data:
+                    _add(sets, params, "is_featured", 1 if data.get("is_featured") else 0, as_int=True)
+                if "is_active" in data:
+                    _add(sets, params, "is_active", 1 if data.get("is_active", True) else 0, as_int=True)
             else:
                 _add(sets, params, "city", data.get("city"))
                 _add(sets, params, "locality", data.get("locality"))
@@ -952,9 +1193,13 @@ def register_properties_routes(app):
                 _add(sets, params, "builder", data.get("builder"))
                 _add(sets, params, "total_acres", data.get("total_acres"), as_float=True)
             
-            if sets:
-                params.append(property_id)
-                execute_update(f"UPDATE {table} SET {', '.join(sets)} WHERE id = %s", tuple(params))
+            if not sets:
+                return error_response(
+                    "No fields to update. Ensure the request body includes property fields (e.g. city, locality, property_name, description).",
+                    400
+                )
+            params.append(property_id)
+            execute_update(f"UPDATE {table} SET {', '.join(sets)} WHERE id = %s", tuple(params))
             
             # Images: replace all images - handle both image_gallery (with categories) and flat images array
             image_gallery = data.get("image_gallery") or []
@@ -1075,8 +1320,13 @@ def register_properties_routes(app):
                     property_category = 'plot'
                     current_app.logger.info(f"Property {property_id} found in plot_properties")
                 else:
-                    current_app.logger.warning(f"Delete failed: Property {property_id} not found in any table")
-                    return error_response("Property not found", 404)
+                    commercial_check = execute_query("SELECT id FROM commercial_properties WHERE id = %s", (property_id,))
+                    if commercial_check:
+                        property_category = 'commercial'
+                        current_app.logger.info(f"Property {property_id} found in commercial_properties")
+                    else:
+                        current_app.logger.warning(f"Delete failed: Property {property_id} not found in any table")
+                        return error_response("Property not found", 404)
             
             # Delete related data first (property_features has no CASCADE, so must delete manually)
             # Images will be deleted automatically via CASCADE foreign key
@@ -1098,6 +1348,17 @@ def register_properties_routes(app):
                     current_app.logger.warning(f"Delete failed: Property {property_id} not found in residential_properties")
                     return error_response("Property not found", 404)
                 current_app.logger.info(f"Property {property_id} deleted successfully from residential_properties")
+            elif property_category == 'commercial':
+                try:
+                    execute_update("DELETE FROM commercial_property_images WHERE property_id = %s", (property_id,))
+                except Exception as img_e:
+                    current_app.logger.warning(f"Could not delete commercial_property_images: {img_e}")
+                result = execute_update("DELETE FROM commercial_properties WHERE id = %s", (property_id,))
+                current_app.logger.info(f"DELETE query executed, affected rows: {result}")
+                if result == 0:
+                    current_app.logger.warning(f"Delete failed: Property {property_id} not found in commercial_properties")
+                    return error_response("Property not found", 404)
+                current_app.logger.info(f"Property {property_id} deleted successfully from commercial_properties")
             else:  # plot
                 result = execute_update("DELETE FROM plot_properties WHERE id = %s", (property_id,))
                 current_app.logger.info(f"DELETE query executed, affected rows: {result}")
@@ -1109,7 +1370,11 @@ def register_properties_routes(app):
             # Verify deletion
             verify_residential = execute_query("SELECT id FROM residential_properties WHERE id = %s", (property_id,))
             verify_plot = execute_query("SELECT id FROM plot_properties WHERE id = %s", (property_id,))
-            if verify_residential or verify_plot:
+            try:
+                verify_commercial = execute_query("SELECT id FROM commercial_properties WHERE id = %s", (property_id,))
+            except Exception:
+                verify_commercial = []
+            if verify_residential or verify_plot or verify_commercial:
                 current_app.logger.error(f"Property {property_id} still exists after deletion attempt!")
                 return error_response("Property deletion failed - property still exists", 500)
             

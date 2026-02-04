@@ -26,7 +26,9 @@ from utils.helpers import get_client_ip
 
 print("App imported")
 
-# Get debug mode from environment
+# Get debug mode from environment.
+# Production (cPanel): set DEBUG=False or leave unset. Avoid debug=True – Flask restarts wipe in-memory state and can cause "instant logout".
+# Optional: set FLASK_ENV=production so Flask doesn't reload on file change.
 DEBUG_MODE = os.getenv("DEBUG", "False").lower() == "true"
 
 # Initialize Flask app with frontend directory as static folder
@@ -143,6 +145,92 @@ def startup_tasks():
                 print("Images table ready")
             except Exception as e:
                 print(f"Warning: Could not create images table: {str(e)}")
+            # Create commercial_property_images table if it doesn't exist (requires commercial_properties to exist)
+            try:
+                create_commercial_images_table = """
+                    CREATE TABLE IF NOT EXISTS commercial_property_images (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        property_id INT NOT NULL,
+                        image_url TEXT NOT NULL,
+                        image_category VARCHAR(50) NOT NULL DEFAULT 'project',
+                        image_order INT DEFAULT 0,
+                        image_title VARCHAR(500) NULL DEFAULT '',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        INDEX idx_property_id (property_id),
+                        INDEX idx_image_category (image_category),
+                        INDEX idx_image_order (image_order)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+                execute_update(create_commercial_images_table)
+                print("Commercial property images table ready")
+            except Exception as e:
+                print(f"Warning: Could not create commercial_property_images table: {str(e)}")
+            # Create cities table if it doesn't exist (required for /api/cities)
+            try:
+                create_cities_table = """
+                    CREATE TABLE IF NOT EXISTS cities (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        name VARCHAR(250) NOT NULL,
+                        state VARCHAR(250) NOT NULL,
+                        is_active TINYINT(1) DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        UNIQUE KEY unique_city_state (name, state),
+                        INDEX idx_name (name),
+                        INDEX idx_state (state),
+                        INDEX idx_is_active (is_active)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+                execute_update(create_cities_table)
+                print("Cities table ready")
+            except Exception as e:
+                print(f"Warning: Could not create cities table: {str(e)}")
+            # Create unit_types table if it doesn't exist (required for /api/unit-types)
+            try:
+                create_unit_types_table = """
+                    CREATE TABLE IF NOT EXISTS unit_types (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        name VARCHAR(50) NOT NULL UNIQUE,
+                        display_name VARCHAR(250) NOT NULL,
+                        bedrooms INT NOT NULL DEFAULT 0,
+                        is_active TINYINT(1) DEFAULT 1,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        INDEX idx_name (name),
+                        INDEX idx_bedrooms (bedrooms),
+                        INDEX idx_is_active (is_active)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+                execute_update(create_unit_types_table)
+                print("Unit types table ready")
+            except Exception as e:
+                print(f"Warning: Could not create unit_types table: {str(e)}")
+            # Create user_sessions table if it doesn't exist (required for /api/auth/login)
+            try:
+                create_user_sessions_table = """
+                    CREATE TABLE IF NOT EXISTS user_sessions (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        session_id VARCHAR(255) NOT NULL UNIQUE,
+                        user_id INT NOT NULL,
+                        user_email VARCHAR(255) NOT NULL,
+                        ip_address VARCHAR(45) NOT NULL,
+                        user_agent TEXT,
+                        is_active TINYINT(1) DEFAULT 1,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        expires_at TIMESTAMP NOT NULL,
+                        last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        INDEX idx_session_id (session_id),
+                        INDEX idx_user_id (user_id),
+                        INDEX idx_is_active (is_active),
+                        INDEX idx_expires_at (expires_at),
+                        INDEX idx_active_expires (is_active, expires_at),
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+                execute_update(create_user_sessions_table)
+                print("User sessions table ready")
+            except Exception as e:
+                print(f"Warning: Could not create user_sessions table: {str(e)}")
         else:
             print("Warning: Database connection test failed")
     else:
@@ -284,4 +372,5 @@ except ImportError as e:
 application = app
 
 if __name__ == "__main__":
+    # For production: run with DEBUG=False (or app.run(debug=False)) to avoid restarts wiping session state
     app.run(debug=DEBUG_MODE, host="0.0.0.0", port=5000)

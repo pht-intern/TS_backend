@@ -43,6 +43,21 @@ class ListingType(str, Enum):
 class PropertyCategory(str, Enum):
     RESIDENTIAL = "residential"
     PLOT = "plot"
+    COMMERCIAL = "commercial"
+
+
+class CommercialPropertyType(str, Enum):
+    """Commercial property type: Office Space, Showrooms, Warehouse"""
+    OFFICE_SPACE = "office_space"
+    WAREHOUSE = "warehouse"
+    SHOWROOMS = "showrooms"
+
+
+class WarehouseType(str, Enum):
+    """Warehouse sub-type"""
+    COLD_STORAGE = "cold_storage"
+    INDUSTRIAL = "industrial"
+    LOGISTIC = "logistic"
 
 
 class InquiryStatus(str, Enum):
@@ -200,6 +215,121 @@ class PlotPropertyUpdate(BaseModel):
 
 class PlotProperty(PlotPropertyBase):
     """Complete plot property model with database fields"""
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetime(self, value: datetime, _info):
+        return value.isoformat() if value else None
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================
+# COMMERCIAL PROPERTY MODELS
+# Office Space, Showrooms, Warehouse
+# ============================================
+
+class CommercialPropertyBase(BaseModel):
+    """Base commercial property model (Office Space, Showrooms, Warehouse)"""
+    city: str = Field(..., max_length=250)
+    locality: str = Field(..., max_length=250)
+    property_name: str = Field(..., max_length=250)
+    property_type: CommercialPropertyType = Field(..., description="office_space, warehouse, or showrooms")
+    price: float = Field(..., ge=0)
+    price_text: Optional[str] = Field(None, max_length=500, description="Original price text")
+    price_negotiable: bool = False
+    status: str = Field(..., description="sale or rent")
+    listing_type: Optional[str] = Field(None, max_length=50)
+    property_status: Optional[str] = Field(None, max_length=50)
+    description: Optional[str] = None
+    location_link: Optional[str] = Field(None, description="Google Maps location link")
+    directions: Optional[str] = Field(None, description="Directions to the property")
+    # Common area fields
+    super_built_up_area: Optional[float] = Field(None, ge=0, description="Super built-up area in sq.ft.")
+    carpet_area: Optional[float] = Field(None, ge=0, description="Carpet area in sq.ft.")
+    plot_area: Optional[float] = Field(None, ge=0, description="Plot area in sq.ft.")
+    # Office Space specific
+    total_floors: Optional[int] = Field(None, ge=0)
+    floor_number: Optional[int] = Field(None, ge=0)
+    total_seats_workstations: Optional[int] = Field(None, ge=0)
+    number_of_cabins: Optional[int] = Field(None, ge=0)
+    number_of_parking_slots: Optional[int] = Field(None, ge=0)
+    parking_options: Optional[List[str]] = Field(default=None, description="e.g. reserved_parking, visitors_parking")
+    # Showrooms specific
+    frontage_width: Optional[float] = Field(None, ge=0)
+    frontage_unit: Optional[str] = Field(None, max_length=10, description="ft or m")
+    footfall_potential: Optional[str] = Field(None, max_length=20, description="low, medium, high")
+    ground_floor_area: Optional[float] = Field(None, ge=0)
+    ceiling_height: Optional[float] = Field(None, ge=0)
+    mezzanine_area: Optional[float] = Field(None, ge=0)
+    # Warehouse specific
+    warehouse_type: Optional[WarehouseType] = Field(None, description="cold_storage, industrial, logistic")
+    clearance_height: Optional[float] = Field(None, ge=0)
+    clearance_height_unit: Optional[str] = Field(None, max_length=10, description="ft or m")
+    dock_levelers: Optional[int] = Field(None, ge=0)
+    number_of_shutters: Optional[int] = Field(None, ge=0)
+    shutter_height: Optional[float] = Field(None, ge=0)
+    shutter_height_unit: Optional[str] = Field(None, max_length=10, description="ft or m")
+    floor_load_capacity: Optional[float] = Field(None, ge=0, description="Kg/Sq ft")
+    is_featured: bool = False
+    is_active: bool = True
+
+
+class CommercialPropertyCreate(CommercialPropertyBase):
+    """Model for creating a new commercial property"""
+    pass
+
+
+class CommercialPropertyUpdate(BaseModel):
+    """Model for updating a commercial property (all fields optional)"""
+    city: Optional[str] = Field(None, max_length=250)
+    locality: Optional[str] = Field(None, max_length=250)
+    property_name: Optional[str] = Field(None, max_length=250)
+    property_type: Optional[CommercialPropertyType] = None
+    price: Optional[float] = Field(None, ge=0)
+    price_text: Optional[str] = Field(None, max_length=500)
+    price_negotiable: Optional[bool] = None
+    status: Optional[str] = None
+    listing_type: Optional[str] = Field(None, max_length=50)
+    property_status: Optional[str] = Field(None, max_length=50)
+    description: Optional[str] = None
+    location_link: Optional[str] = None
+    directions: Optional[str] = None
+    super_built_up_area: Optional[float] = Field(None, ge=0)
+    carpet_area: Optional[float] = Field(None, ge=0)
+    plot_area: Optional[float] = Field(None, ge=0)
+    # Office Space
+    total_floors: Optional[int] = Field(None, ge=0)
+    floor_number: Optional[int] = Field(None, ge=0)
+    total_seats_workstations: Optional[int] = Field(None, ge=0)
+    number_of_cabins: Optional[int] = Field(None, ge=0)
+    number_of_parking_slots: Optional[int] = Field(None, ge=0)
+    parking_options: Optional[List[str]] = None
+    # Showrooms
+    frontage_width: Optional[float] = Field(None, ge=0)
+    frontage_unit: Optional[str] = Field(None, max_length=10)
+    footfall_potential: Optional[str] = Field(None, max_length=20)
+    ground_floor_area: Optional[float] = Field(None, ge=0)
+    ceiling_height: Optional[float] = Field(None, ge=0)
+    mezzanine_area: Optional[float] = Field(None, ge=0)
+    # Warehouse
+    warehouse_type: Optional[WarehouseType] = None
+    clearance_height: Optional[float] = Field(None, ge=0)
+    clearance_height_unit: Optional[str] = Field(None, max_length=10)
+    dock_levelers: Optional[int] = Field(None, ge=0)
+    number_of_shutters: Optional[int] = Field(None, ge=0)
+    shutter_height: Optional[float] = Field(None, ge=0)
+    shutter_height_unit: Optional[str] = Field(None, max_length=10)
+    floor_load_capacity: Optional[float] = Field(None, ge=0)
+    is_featured: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+class CommercialProperty(CommercialPropertyBase):
+    """Complete commercial property model with database fields"""
     id: int
     created_at: datetime
     updated_at: datetime

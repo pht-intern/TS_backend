@@ -7,7 +7,7 @@ import re
 import traceback
 from database import execute_query, execute_update
 from utils.helpers import abort_with_message, require_admin_auth
-from data.city_localities import get_localities_for_city
+from data.city_localities import get_localities_for_city, get_all_cities as get_all_cities_from_file
 
 # Mapping of important/well-known cities per state
 IMPORTANT_CITIES_BY_STATE = {
@@ -52,31 +52,35 @@ def register_cities_routes(app):
     
     @app.route("/api/cities", methods=["GET"])
     def get_active_cities():
-        """Get all active cities (public endpoint) - returns all cities from active states"""
+        """Get cities for dropdown - from city_localities.py first, then DB fallback"""
         try:
-            query = """
-                SELECT 
-                    c.name,
-                    c.state
-                FROM cities c
-                WHERE c.is_active = 1
-                ORDER BY c.state, c.name
-            """
-            cities = execute_query(query)
-            
-            # Return all active cities (not just important ones)
-            # When a state is activated, all its cities become active and should appear in dropdowns
-            filtered_cities = []
-            if cities:
-                for city in cities:
-                    city_name = city.get('name', '').strip()
-                    state_name = city.get('state', '').strip()
-                    
-                    if city_name and state_name:
-                        filtered_cities.append({
-                            'name': city_name,
-                            'state': state_name
-                        })
+            # Primary: cities from city_localities.py (dropdown content)
+            city_names = get_all_cities_from_file()
+            if city_names:
+                filtered_cities = [
+                    {'name': c.strip(), 'state': ''}
+                    for c in sorted(city_names)
+                    if c and c.strip()
+                ]
+            else:
+                # Fallback: database (active cities)
+                query = """
+                    SELECT c.name, c.state
+                    FROM cities c
+                    WHERE c.is_active = 1
+                    ORDER BY c.state, c.name
+                """
+                cities = execute_query(query)
+                filtered_cities = []
+                if cities:
+                    for city in cities:
+                        city_name = city.get('name', '').strip()
+                        state_name = city.get('state', '').strip()
+                        if city_name:
+                            filtered_cities.append({
+                                'name': city_name,
+                                'state': state_name
+                            })
             
             data = {
                 "success": True,
