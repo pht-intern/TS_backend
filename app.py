@@ -39,6 +39,10 @@ app = Flask(__name__, static_folder=str(FRONTEND_DIR), static_url_path='')
 SECRET_KEY = os.getenv("SECRET_KEY", os.urandom(32).hex())
 app.config['SECRET_KEY'] = SECRET_KEY
 
+# Session lifetime (31 days for visitor tracking)
+from datetime import timedelta
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=31)
+
 # Session cookie configuration for cross-origin support (cPanel production)
 app.config['SESSION_COOKIE_SAMESITE'] = 'None'
 app.config['SESSION_COOKIE_SECURE'] = True

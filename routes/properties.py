@@ -710,31 +710,78 @@ def register_properties_routes(app):
     
     @app.route("/api/properties/<int:property_id>", methods=["GET"])
     def get_property(property_id: int):
-        """Get a single property by ID with images and features"""
+        """Get a single property by ID with images and features
+        
+        REQUIRED query parameter: category (commercial, residential, plot)
+        Since property IDs can overlap between tables, category is REQUIRED to identify the correct table.
+        """
         try:
-            # Check residential_properties first (minimal columns to avoid missing-column errors)
-            residential_query = """
-                SELECT 
-                    id, city, locality, property_name as title, property_name, 
-                    unit_type, bedrooms, bathrooms, buildup_area as area, buildup_area, carpet_area, 
-                    super_built_up_area, price, price_text, price_negotiable,
-                    type, villa_type, status, listing_type, property_status, description,
-                    location_link, directions, length, breadth,
-                    builder, configuration, total_flats, total_floors, total_acres,
-                    is_featured, is_active, created_at, updated_at,
-                    'residential' as property_category,
-                    NULL as plot_area, NULL as plot_length, NULL as plot_breadth,
-                    NULL as project_name,
-                    type as property_type,
-                    NULL as price_includes_registration
-                FROM residential_properties
-                WHERE id = %s
-            """
-            properties = execute_query(residential_query, (property_id,))
-            property_category = 'residential'
+            # CRITICAL FIX: Category is REQUIRED - IDs are not globally unique across tables
+            category = request.args.get('category', '').lower()
             
-            # If not found in residential, check plot_properties
-            if not properties:
+            if not category or category not in ['commercial', 'residential', 'plot']:
+                return error_response(
+                    "Category parameter is required. Use ?category=commercial, ?category=residential, or ?category=plot",
+                    400
+                )
+            
+            # CRITICAL FIX: Check ALL tables to detect ID collisions (safety guard)
+            commercial_result = None
+            residential_result = None
+            plot_result = None
+            
+            # Check all three tables in parallel
+            try:
+                commercial_query = """
+                    SELECT 
+                        id, city, locality, property_name as title, property_name,
+                        NULL as unit_type, 0 as bedrooms, 0 as bathrooms,
+                        COALESCE(super_built_up_area, 0) as area, NULL as buildup_area, carpet_area,
+                        super_built_up_area, price, price_text, price_negotiable,
+                        property_type as type, status, property_status, description,
+                        location_link, directions, NULL as length, NULL as breadth,
+                        NULL as builder, NULL as configuration, NULL as total_flats, total_floors, NULL as total_acres,
+                        is_featured, is_active, created_at, updated_at,
+                        'commercial' as property_category,
+                        plot_area, NULL as plot_length, NULL as plot_breadth,
+                        property_name as project_name,
+                        property_type,
+                        NULL as price_includes_registration,
+                        floor_number, total_seats_workstations, number_of_cabins, number_of_parking_slots,
+                        parking_options, frontage_width, frontage_unit, footfall_potential,
+                        ground_floor_area, ceiling_height, mezzanine_area,
+                        warehouse_type, clearance_height, clearance_height_unit, dock_levelers,
+                        number_of_shutters, shutter_height, shutter_height_unit, floor_load_capacity
+                    FROM commercial_properties
+                    WHERE id = %s
+                """
+                commercial_result = execute_query(commercial_query, (property_id,))
+            except Exception:
+                pass
+            
+            try:
+                residential_query = """
+                    SELECT 
+                        id, city, locality, property_name as title, property_name, 
+                        unit_type, bedrooms, bathrooms, buildup_area as area, buildup_area, carpet_area, 
+                        super_built_up_area, price, price_text, price_negotiable,
+                        type, villa_type, status, listing_type, property_status, description,
+                        location_link, directions, length, breadth,
+                        builder, configuration, total_flats, total_floors, total_acres,
+                        is_featured, is_active, created_at, updated_at,
+                        'residential' as property_category,
+                        NULL as plot_area, NULL as plot_length, NULL as plot_breadth,
+                        NULL as project_name,
+                        type as property_type,
+                        NULL as price_includes_registration
+                    FROM residential_properties
+                    WHERE id = %s
+                """
+                residential_result = execute_query(residential_query, (property_id,))
+            except Exception:
+                pass
+            
+            try:
                 plot_query = """
                     SELECT 
                         id, city, locality, project_name as title, project_name as property_name,
@@ -752,42 +799,58 @@ def register_properties_routes(app):
                     FROM plot_properties
                     WHERE id = %s
                 """
-                properties = execute_query(plot_query, (property_id,))
-                property_category = 'plot'
-
-            # If not found in plot, check commercial_properties
-            if not properties:
-                try:
-                    commercial_query = """
-                        SELECT 
-                            id, city, locality, property_name as title, property_name,
-                            NULL as unit_type, 0 as bedrooms, 0 as bathrooms,
-                            COALESCE(super_built_up_area, 0) as area, NULL as buildup_area, carpet_area,
-                            super_built_up_area, price, price_text, price_negotiable,
-                            property_type as type, status, property_status, description,
-                            location_link, directions, NULL as length, NULL as breadth,
-                            NULL as builder, NULL as configuration, NULL as total_flats, total_floors, NULL as total_acres,
-                            is_featured, is_active, created_at, updated_at,
-                            'commercial' as property_category,
-                            plot_area, NULL as plot_length, NULL as plot_breadth,
-                            property_name as project_name,
-                            property_type,
-                            NULL as price_includes_registration,
-                            floor_number, total_seats_workstations, number_of_cabins, number_of_parking_slots,
-                            parking_options, frontage_width, frontage_unit, footfall_potential,
-                            ground_floor_area, ceiling_height, mezzanine_area,
-                            warehouse_type, clearance_height, clearance_height_unit, dock_levelers,
-                            number_of_shutters, shutter_height, shutter_height_unit, floor_load_capacity
-                        FROM commercial_properties
-                        WHERE id = %s
-                    """
-                    properties = execute_query(commercial_query, (property_id,))
-                    property_category = 'commercial'
-                except Exception:
-                    properties = []
+                plot_result = execute_query(plot_query, (property_id,))
+            except Exception:
+                pass
             
+            # CRITICAL FIX: Safety guard - detect ID collisions
+            matches = []
+            if commercial_result:
+                matches.append('commercial')
+            if residential_result:
+                matches.append('residential')
+            if plot_result:
+                matches.append('plot')
+            
+            # CRITICAL FIX: HARD-FAIL if ID exists in multiple tables (data integrity violation)
+            if len(matches) > 1:
+                error_msg = (
+                    f"DATA_INTEGRITY_ERROR: Property ID {property_id} exists in multiple tables: {matches}. "
+                    f"This is a critical data integrity violation. Each property ID must exist in only one table. "
+                    f"Please delete the duplicate row(s) from the incorrect table(s)."
+                )
+                current_app.logger.error(error_msg)
+                return error_response(
+                    {
+                        "error": "DATA_INTEGRITY_ERROR",
+                        "message": f"Property {property_id} exists in multiple tables",
+                        "tables": matches,
+                        "detail": "This property ID exists in multiple property tables. Please contact admin to resolve this data integrity issue."
+                    },
+                    500
+                )
+            
+            # CRITICAL FIX: Return property from requested category ONLY
+            # If category doesn't match or property doesn't exist, return 404
+            properties = None
+            property_category = None
+            
+            if category == 'commercial' and commercial_result:
+                properties = commercial_result
+                property_category = 'commercial'
+            elif category == 'residential' and residential_result:
+                properties = residential_result
+                property_category = 'residential'
+            elif category == 'plot' and plot_result:
+                properties = plot_result
+                property_category = 'plot'
+            
+            # If requested category doesn't have the property, return 404
             if not properties:
-                return error_response("Property not found", 404)
+                return error_response(
+                    f"Property ID {property_id} not found in {category} properties",
+                    404
+                )
             
             property_data = dict(properties[0])
             row = properties[0]

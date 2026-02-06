@@ -1,7 +1,7 @@
 """
 Visitor info routes
 """
-from flask import request, jsonify
+from flask import request, jsonify, session
 import traceback
 import threading
 from database import execute_query, execute_insert
@@ -12,6 +12,47 @@ from utils.email import send_self_notification_email
 
 def register_visitor_info_routes(app):
     """Register visitor info routes"""
+    
+    @app.route("/api/visitor-info/check", methods=["GET"])
+    def check_visitor_submitted():
+        """Check if visitor has already submitted the form (based on session/IP)"""
+        try:
+            # Get client IP address
+            ip_address = get_client_ip()
+            
+            # Check session first (faster)
+            if session.get('visitor_form_submitted'):
+                return jsonify({
+                    'submitted': True,
+                    'message': 'Visitor form already submitted in this session'
+                }), 200
+            
+            # Also check database for this IP address (in case session expired but same IP)
+            # This prevents showing modal again even if session is cleared
+            ip_check_query = "SELECT COUNT(*) as count FROM visitor_info WHERE ip_address = %s"
+            ip_result = execute_query(ip_check_query, (ip_address,))
+            
+            if ip_result and len(ip_result) > 0 and ip_result[0].get('count', 0) > 0:
+                # IP found in database, mark session so we don't check DB again
+                session['visitor_form_submitted'] = True
+                session['visitor_ip'] = ip_address
+                return jsonify({
+                    'submitted': True,
+                    'message': 'Visitor form already submitted from this IP address'
+                }), 200
+            
+            return jsonify({
+                'submitted': False,
+                'message': 'Visitor form not submitted yet'
+            }), 200
+        except Exception as e:
+            print(f"Error checking visitor submission: {str(e)}")
+            traceback.print_exc()
+            # On error, allow modal to show (fail open)
+            return jsonify({
+                'submitted': False,
+                'message': 'Error checking submission status'
+            }), 200
     
     @app.route("/api/visitor-info", methods=["POST"])
     def create_visitor_info():
@@ -26,11 +67,24 @@ def register_visitor_info_routes(app):
             # Get client IP address
             ip_address = get_client_ip()
             
+            # Check if already submitted in this session
+            if session.get('visitor_form_submitted'):
+                return jsonify({
+                    'message': 'Form already submitted',
+                    'submitted': True
+                }), 200
+            
             query = "INSERT INTO visitor_info (full_name, email, phone, looking_for, ip_address) VALUES (%s, %s, %s, %s, %s)"
             visitor_id = execute_insert(query, (
                 visitor_data.full_name, visitor_data.email,
                 visitor_data.phone, visitor_data.looking_for, ip_address
             ))
+            
+            # Mark session as submitted to prevent showing modal again
+            session['visitor_form_submitted'] = True
+            session['visitor_ip'] = ip_address
+            # Make session permanent so it persists across browser restarts
+            session.permanent = True
             
             # Send self-notification email in background
             def send_notification():
@@ -43,7 +97,8 @@ def register_visitor_info_routes(app):
                         "Visitor Email": visitor_data.email,
                         "Visitor Phone": visitor_data.phone,
                         "Looking For": visitor_data.looking_for or "Not specified",
-                        "Visitor ID": visitor_id
+                        "Visitor ID": visitor_id,
+                        "IP Address": ip_address
                     }
                 )
             
