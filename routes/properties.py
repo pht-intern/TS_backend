@@ -31,6 +31,122 @@ def register_properties_routes(app):
             return response
         return get_properties()
     
+    @app.route("/api/properties/field-options", methods=["GET", "OPTIONS"])
+    def get_property_field_options():
+        """Return status and listing_type options for property forms (from DB + enum fallback)."""
+        if request.method == "OPTIONS":
+            response = make_response()
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+            return response
+        try:
+            status_options = []
+            listing_type_options = []
+            # Fetch distinct status from residential_properties and plot_properties
+            try:
+                status_rows = execute_query("""
+                    SELECT DISTINCT status FROM residential_properties WHERE status IS NOT NULL AND status != ''
+                    UNION
+                    SELECT DISTINCT status FROM plot_properties WHERE status IS NOT NULL AND status != ''
+                    ORDER BY status
+                """)
+                if status_rows:
+                    seen_status = set()
+                    for r in status_rows:
+                        v = (r.get('status') or '').strip()
+                        if v:
+                            # Normalize resell -> resale; skip sell (Sale removed from status)
+                            if v.lower() == 'sell':
+                                continue
+                            canon = 'resale' if v.lower() == 'resell' else v.lower()
+                            if canon in seen_status:
+                                continue
+                            seen_status.add(canon)
+                            label = v.replace('_', ' ').title()
+                            if v == 'resell':
+                                label = 'Resale'
+                            status_options.append({'value': canon, 'label': label})
+            except Exception:
+                pass
+            if not status_options:
+                status_options = [
+                    {'value': 'new', 'label': 'New'},
+                    {'value': 'resale', 'label': 'Resale'},
+                ]
+            else:
+                full_status = [{'value': 'new', 'label': 'New'}, {'value': 'resale', 'label': 'Resale'}]
+                seen = {o['value'] for o in status_options}
+                for o in full_status:
+                    if o['value'] not in seen:
+                        status_options.append(o)
+                        seen.add(o['value'])
+            # Fetch distinct listing_type from residential_properties and plot_properties
+            try:
+                lt_rows = execute_query("""
+                    SELECT DISTINCT listing_type FROM residential_properties WHERE listing_type IS NOT NULL AND listing_type != ''
+                    UNION
+                    SELECT DISTINCT listing_type FROM plot_properties WHERE listing_type IS NOT NULL AND listing_type != ''
+                    ORDER BY listing_type
+                """)
+                if lt_rows:
+                    seen_lt = set()
+                    for r in lt_rows:
+                        v = (r.get('listing_type') or '').strip()
+                        if v:
+                            # Normalize to snake_case so "Ready to move" and "ready_to_move" dedupe
+                            key = v.lower().replace(' ', '_')
+                            if key in seen_lt:
+                                continue
+                            seen_lt.add(key)
+                            label = v.replace('_', ' ').title()
+                            listing_type_options.append({'value': key, 'label': label})
+            except Exception:
+                pass
+            if not listing_type_options:
+                listing_type_options = [
+                    {'value': 'sale', 'label': 'Sale'},
+                    {'value': 'rent', 'label': 'Rent'},
+                    {'value': 'under_construction', 'label': 'Under Construction'},
+                    {'value': 'ready_to_move', 'label': 'Ready to Move'},
+                    {'value': 'under_development', 'label': 'Under Development'},
+                ]
+            else:
+                full_lt = [
+                    {'value': 'sale', 'label': 'Sale'},
+                    {'value': 'rent', 'label': 'Rent'},
+                    {'value': 'under_construction', 'label': 'Under Construction'},
+                    {'value': 'ready_to_move', 'label': 'Ready to Move'},
+                    {'value': 'under_development', 'label': 'Under Development'},
+                ]
+                seen = {o['value'] for o in listing_type_options}
+                for o in full_lt:
+                    if o['value'] not in seen:
+                        listing_type_options.append(o)
+                        seen.add(o['value'])
+            # Dedupe by value (DB may return "Ready to move" and we have "ready_to_move")
+            def dedupe_by_value(opts):
+                seen_vals = set()
+                out = []
+                for o in opts:
+                    v = (o.get('value') or '').strip().lower()
+                    key = v.replace(' ', '_')
+                    if key not in seen_vals:
+                        seen_vals.add(key)
+                        out.append(o)
+                return out
+            status_options = dedupe_by_value(status_options)
+            listing_type_options = dedupe_by_value(listing_type_options)
+            result = jsonify({'status': status_options, 'listing_type': listing_type_options})
+            result.headers['Access-Control-Allow-Origin'] = '*'
+            return result
+        except Exception as e:
+            print(f"Error fetching property field options: {e}")
+            traceback.print_exc()
+            err, code = error_response(str(e), 500)
+            err.headers['Access-Control-Allow-Origin'] = '*'
+            return err, code
+
     @app.route("/api/properties", methods=["POST"])
     @require_admin_auth
     def create_property_route():
@@ -1046,124 +1162,82 @@ def register_properties_routes(app):
     @app.route("/api/properties/<int:property_id>", methods=["POST"])
     @require_admin_auth
     def update_property(property_id: int):
-        """Update a property (residential or plot). Dispatches by which table contains the id."""
+        """Update a property. Dispatches by which table contains the id (residential, plot, commercial)."""
         try:
-            # Resolve which table has this id
             res = execute_query("SELECT id FROM residential_properties WHERE id = %s", (property_id,))
             if res:
                 table, cat = "residential_properties", "residential"
-                feature_table = "property_features"
-                feature_category = "residential"
+                feature_table, feature_category = "property_features", "residential"
                 img_table = "residential_property_images"
             else:
                 res = execute_query("SELECT id FROM plot_properties WHERE id = %s", (property_id,))
                 if res:
                     table, cat = "plot_properties", "plot"
-                    feature_table = "property_features"
-                    feature_category = "plot"
+                    feature_table, feature_category = "property_features", "plot"
                     img_table = "plot_property_images"
                 else:
                     res = execute_query("SELECT id FROM commercial_properties WHERE id = %s", (property_id,))
                     if not res:
                         return error_response("Property not found", 404)
                     table, cat = "commercial_properties", "commercial"
-                    feature_table = "property_features"
-                    feature_category = "commercial"
+                    feature_table, feature_category = "property_features", "commercial"
                     img_table = "commercial_property_images"
-            
             data = request.get_json()
             if not data:
                 return error_response("Invalid request data", 400)
-
-            # Accept frontend facing-direction dropdown value under `direction`
-            # (DB column is `directions`; keep compatibility without a schema migration)
             if data.get("directions") is None and data.get("direction") is not None:
                 data["directions"] = data.get("direction")
-            
-            # Map frontend type to DB enum: individual_house->house, apartments->apartment, villas->villa (avoids chk on type)
             _type_map = {"individual_house": "house", "apartments": "apartment", "villas": "villa"}
 
-            def _normalize_db_status(value):
-                if value is None:
-                    return None
-                v = str(value).strip().lower()
-                if v in ("new",):
-                    return "new"
-                if v in ("resale", "resell"):
-                    return "resell"
-                if v in ("sale", "sell", "rent"):
-                    return "sell"
+            def _norm_status(v):
+                if v is None: return None
+                s = str(v).strip().lower()
+                if s in ("new",): return "new"
+                if s in ("resale", "resell"): return "resell"
+                if s in ("sale", "sell", "rent"): return "sell"
                 return None
 
-            def _normalize_db_listing_type(value):
-                if value is None:
-                    return None
-                v = str(value).strip().lower()
-                if v in ("ready_to_move", "ready to move", "ready-to-move"):
-                    return "Ready to move"
-                if v in (
-                    "under_construction", "under construction", "under-construction",
-                    "under_development", "under development", "under-development",
-                ):
-                    return "Under construction"
-                if v == "ready":
-                    return "Ready to move"
+            def _norm_listing(v):
+                if v is None: return None
+                s = str(v).strip().lower()
+                if s in ("ready_to_move", "ready to move", "ready-to-move"): return "Ready to move"
+                if s in ("under_construction", "under construction", "under_development", "under development"): return "Under construction"
+                if s == "ready": return "Ready to move"
                 return None
 
-            def _normalize_db_villa_type(value):
-                if value is None:
-                    return None
-                v = str(value).strip().lower().replace('-', '_').replace(' ', '_')
-                if v in ("independent_villa", "independentvilla"):
-                    return "Independent Villa"
-                if v in ("row_villa", "rowvilla"):
-                    return "Row Villa"
-                if v in ("villament",):
-                    return "Villament"
-                if v in ("independent",):
-                    return "Independent Villa"
-                if v in ("row",):
-                    return "Row Villa"
+            def _norm_villa(v):
+                if v is None: return None
+                s = str(v).strip().lower().replace("-", "_").replace(" ", "_")
+                if s in ("independent_villa", "independentvilla", "independent"): return "Independent Villa"
+                if s in ("row_villa", "rowvilla", "row"): return "Row Villa"
+                if s == "villament": return "Villament"
                 return None
 
-            _status = _normalize_db_status(data.get("status")) or _normalize_db_status(data.get("listing_type"))
-            _status = _status or "sell"
-            _listing_type = (
-                _normalize_db_listing_type(data.get("listing_type"))
-                or _normalize_db_listing_type(data.get("property_status"))
-                or "Ready to move"
-            )
+            _status = _norm_status(data.get("listing_type")) or _norm_status(data.get("status")) or "sell"
+            _listing = _norm_listing(data.get("listing_type")) or _norm_listing(data.get("property_status")) or "Ready to move"
             _pstat = data.get("property_status")
-            
+
             def _add(sets, params, key, val, as_int=False, as_float=False):
                 if val is None: return
-                if as_int and isinstance(val, bool): val = 1 if val else 0
-                elif as_int: val = safe_int(val, 0)
+                if as_int: val = 1 if isinstance(val, bool) and val else safe_int(val, 0)
                 elif as_float: val = safe_float(val, 0.0)
                 sets.append(f"{key} = %s")
                 params.append(val)
-            
+
             def _set_null(sets, params, key):
                 sets.append(f"{key} = %s")
                 params.append(None)
-            
+
             sets, params = [], []
             if cat == "residential":
                 _add(sets, params, "city", data.get("city"))
                 _add(sets, params, "locality", data.get("locality"))
                 _add(sets, params, "property_name", data.get("property_name"))
-                # Validate unit_type - must be one of: 'rk', 'bhk', '4plus' (database constraint)
-                _unit_type = data.get("unit_type", "bhk")
-                if _unit_type not in ("rk", "bhk", "4plus"):
-                    # If invalid, determine based on bedrooms
-                    _bedrooms = safe_int(data.get("bedrooms"), 1)
-                    if _bedrooms == 0:
-                        _unit_type = "rk"
-                    elif _bedrooms >= 4:
-                        _unit_type = "4plus"
-                    else:
-                        _unit_type = "bhk"
-                _add(sets, params, "unit_type", _unit_type)
+                ut = data.get("unit_type", "bhk")
+                if ut not in ("rk", "bhk", "4plus"):
+                    br = safe_int(data.get("bedrooms"), 1)
+                    ut = "rk" if br == 0 else ("4plus" if br >= 4 else "bhk")
+                _add(sets, params, "unit_type", ut)
                 _add(sets, params, "bedrooms", data.get("bedrooms"), as_int=True)
                 _add(sets, params, "bathrooms", data.get("bathrooms") or data.get("bathrooms_count"), as_float=True)
                 _add(sets, params, "buildup_area", data.get("buildup_area"), as_float=True)
@@ -1173,10 +1247,9 @@ def register_properties_routes(app):
                 _add(sets, params, "price_text", data.get("price_text"))
                 if "price_negotiable" in data: _add(sets, params, "price_negotiable", 1 if data.get("price_negotiable") else 0, as_int=True)
                 _add(sets, params, "type", _type_map.get(data.get("type"), data.get("type")))
-                if "villa_type" in data or "villaType" in data:
-                    _add(sets, params, "villa_type", _normalize_db_villa_type(data.get("villa_type") or data.get("villaType")))
+                if "villa_type" in data or "villaType" in data: _add(sets, params, "villa_type", _norm_villa(data.get("villa_type") or data.get("villaType")))
                 _add(sets, params, "status", _status)
-                _add(sets, params, "listing_type", _listing_type)
+                _add(sets, params, "listing_type", _listing)
                 _add(sets, params, "property_status", _pstat)
                 _add(sets, params, "description", data.get("description"))
                 if "is_featured" in data: _add(sets, params, "is_featured", 1 if data.get("is_featured") else 0, as_int=True)
@@ -1197,9 +1270,8 @@ def register_properties_routes(app):
                 _add(sets, params, "property_type", data.get("property_type"))
                 _add(sets, params, "price", data.get("price"), as_float=True)
                 _add(sets, params, "price_text", data.get("price_text"))
-                if "price_negotiable" in data:
-                    _add(sets, params, "price_negotiable", 1 if data.get("price_negotiable") else 0, as_int=True)
-                _add(sets, params, "status", (data.get("status") or "sale").strip().lower() if data.get("status") else None)
+                if "price_negotiable" in data: _add(sets, params, "price_negotiable", 1 if data.get("price_negotiable") else 0, as_int=True)
+                _add(sets, params, "status", (data.get("status") or "sale").strip().lower() or None)
                 _add(sets, params, "listing_type", data.get("listing_type"))
                 _add(sets, params, "property_status", data.get("property_status"))
                 _add(sets, params, "description", data.get("description"))
@@ -1231,10 +1303,8 @@ def register_properties_routes(app):
                 _add(sets, params, "shutter_height", data.get("shutter_height"), as_float=True)
                 _add(sets, params, "shutter_height_unit", data.get("shutter_height_unit"))
                 _add(sets, params, "floor_load_capacity", data.get("floor_load_capacity"), as_float=True)
-                if "is_featured" in data:
-                    _add(sets, params, "is_featured", 1 if data.get("is_featured") else 0, as_int=True)
-                if "is_active" in data:
-                    _add(sets, params, "is_active", 1 if data.get("is_active", True) else 0, as_int=True)
+                if "is_featured" in data: _add(sets, params, "is_featured", 1 if data.get("is_featured") else 0, as_int=True)
+                if "is_active" in data: _add(sets, params, "is_active", 1 if data.get("is_active", True) else 0, as_int=True)
             else:
                 _add(sets, params, "city", data.get("city"))
                 _add(sets, params, "locality", data.get("locality"))
@@ -1255,114 +1325,55 @@ def register_properties_routes(app):
                 _add(sets, params, "directions", data.get("directions"))
                 _add(sets, params, "builder", data.get("builder"))
                 _add(sets, params, "total_acres", data.get("total_acres"), as_float=True)
-            
             if not sets:
-                return error_response(
-                    "No fields to update. Ensure the request body includes property fields (e.g. city, locality, property_name, description).",
-                    400
-                )
+                return error_response("No fields to update.", 400)
             params.append(property_id)
             execute_update(f"UPDATE {table} SET {', '.join(sets)} WHERE id = %s", tuple(params))
-            
-            # Images: replace all images - handle both image_gallery (with categories) and flat images array
             image_gallery = data.get("image_gallery") or []
             images = data.get("images") or []
-            
             try:
                 execute_update(f"DELETE FROM {img_table} WHERE property_id = %s", (property_id,))
-            except Exception as img_del_err:
-                print(f"Warning: could not delete images for property {property_id}: {img_del_err}")
-            
-            # Process gallery images if available (preferred format with categories)
-            # Images are already uploaded to images table and have URLs like /api/images/{image_id}
-            if image_gallery:
+            except Exception:
+                pass
+            for idx, item in enumerate(image_gallery):
+                url = item.get("image_url")
+                if not url: continue
+                final_url = url if url.startswith("/api/images/") else (process_image_urls([url], None) or [None])[0]
+                if not final_url: continue
+                db_cat = {"project": "project", "floorplan": "floorplan", "masterplan": "masterplan"}.get(item.get("category", "project"), "project")
+                title = (item.get("title") or "").strip() or ""
                 try:
-                    for idx, gallery_item in enumerate(image_gallery):
-                        image_url = gallery_item.get("image_url")
-                        if image_url:
-                            # If image_url is already in /api/images/{id} format, use it directly
-                            # Otherwise, process it (for backward compatibility with base64 or file paths)
-                            if image_url.startswith("/api/images/"):
-                                # Already stored in images table, use URL directly
-                                final_url = image_url
-                            else:
-                                # Legacy: process base64 or file paths
-                                processed_urls = process_image_urls([image_url], None)
-                                if not processed_urls:
-                                    continue
-                                final_url = processed_urls[0]
-                            
-                            image_category = gallery_item.get("category", "project")
-                            # Map frontend categories to DB categories
-                            category_map = {
-                                "project": "project",
-                                "floorplan": "floorplan",
-                                "masterplan": "masterplan"
-                            }
-                            db_category = category_map.get(image_category, "project")
-                            image_title = (gallery_item.get("title") or "").strip() or ""
-                            # Insert into property images table
-                            execute_update(
-                                f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order, image_title) VALUES (%s, %s, %s, %s, %s)",
-                                (property_id, final_url, db_category, idx, image_title)
-                            )
-                except Exception as img_err:
-                    print(f"Warning: could not update gallery images for property {property_id}: {img_err}")
-            
-            # Fallback to flat images list if gallery is empty
+                    execute_update(f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order, image_title) VALUES (%s, %s, %s, %s, %s)",
+                        (property_id, final_url, db_cat, idx, title))
+                except Exception:
+                    execute_update(f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
+                        (property_id, final_url, db_cat, idx))
             if not image_gallery and images:
-                try:
-                    for idx, url in enumerate(images):
-                        if not url:
-                            continue
-                        
-                        # If image_url is already in /api/images/{id} format, use it directly
-                        if url.startswith("/api/images/"):
-                            final_url = url
-                        else:
-                            # Legacy: process base64 or file paths
-                            processed = process_image_urls([url], None)
-                            if not processed:
-                                continue
-                            final_url = processed[0]
-                        
-                        # Insert into property images table
-                        execute_update(
-                            f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
-                            (property_id, final_url, 'project', idx)
-                        )
-                except Exception as img_err:
-                    print(f"Warning: could not update images for property {property_id}: {img_err}")
-            
-            # Features: replace
+                for idx, url in enumerate(images):
+                    if not url: continue
+                    final_url = url if url.startswith("/api/images/") else (process_image_urls([url], None) or [None])[0]
+                    if not final_url: continue
+                    try:
+                        execute_update(f"INSERT INTO {img_table} (property_id, image_url, image_category, image_order) VALUES (%s, %s, %s, %s)",
+                            (property_id, final_url, "project", idx))
+                    except Exception:
+                        pass
             features = data.get("features") or data.get("amenities") or []
             try:
-                execute_update(
-                    f"DELETE FROM {feature_table} WHERE property_category = %s AND property_id = %s",
-                    (feature_category, property_id)
-                )
+                execute_update(f"DELETE FROM {feature_table} WHERE property_category = %s AND property_id = %s", (feature_category, property_id))
                 for name in features:
                     if name:
-                        execute_update(
-                            f"INSERT IGNORE INTO {feature_table} (property_category, property_id, feature_name) VALUES (%s, %s, %s)",
-                            (feature_category, property_id, name)
-                        )
-            except Exception as fe:
-                print(f"Warning: could not update features for property {property_id}: {fe}")
-            
+                        execute_update(f"INSERT IGNORE INTO {feature_table} (property_category, property_id, feature_name) VALUES (%s, %s, %s)",
+                            (feature_category, property_id, name))
+            except Exception:
+                pass
             return jsonify({"message": "Property updated successfully", "id": property_id})
         except ValueError as e:
-            error_msg = f"Invalid data type: {str(e)}"
-            print(f"Error updating property: {error_msg}")
-            print(f"Received data: {request.get_json()}")
-            traceback.print_exc()
-            return error_response(error_msg, 400)
+            return error_response(f"Invalid data: {str(e)}", 400)
         except Exception as e:
-            error_msg = f"Error updating property: {str(e)}"
-            print(error_msg)
-            print(f"Received data: {request.get_json()}")
+            print(f"Error updating property: {e}")
             traceback.print_exc()
-            return error_response(error_msg, 500)
+            return error_response(f"Error updating property: {str(e)}", 500)
     
     @app.route("/api/properties/<int:property_id>", methods=["DELETE"])
     @require_admin_auth
