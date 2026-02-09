@@ -2,7 +2,7 @@
 Properties routes
 """
 from flask import request, jsonify, current_app, make_response
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 import traceback
 import json
@@ -322,7 +322,12 @@ def register_properties_routes(app):
                         plot_area, NULL as plot_length, NULL as plot_breadth,
                         property_name as project_name,
                         property_type,
-                        NULL as price_includes_registration
+                        NULL as price_includes_registration,
+                        floor_number, total_seats_workstations, number_of_cabins, number_of_parking_slots,
+                        parking_options, frontage_width, frontage_unit, footfall_potential,
+                        ground_floor_area, ceiling_height, mezzanine_area,
+                        warehouse_type, clearance_height, clearance_height_unit, dock_levelers,
+                        number_of_shutters, shutter_height, shutter_height_unit, floor_load_capacity
                     FROM commercial_properties
                     WHERE {commercial_where}
                     ORDER BY created_at DESC
@@ -493,24 +498,24 @@ def register_properties_routes(app):
                 if v in ("new",):
                     return "new"
                 if v in ("resale", "resell"):
-                    return "resell"
+                    return "resale"  # DB uses 'resale' (residential and plot)
                 if v in ("sale", "sell", "rent"):
-                    return "sell"
+                    return "sell"  # residential uses 'sell'; plot uses 'sale' (mapped at insert)
                 return None
 
             def _normalize_db_listing_type(value):
                 if value is None:
                     return None
-                v = str(value).strip().lower()
-                if v in ("ready_to_move", "ready to move", "ready-to-move"):
+                v = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+                if v in ("ready_to_move", "readytomove", "ready"):
                     return "Ready to move"
+                if v in ("ready_to_register", "readytoregister"):
+                    return "Ready to move"  # plot: Ready to register -> Ready to move
                 if v in (
-                    "under_construction", "under construction", "under-construction",
-                    "under_development", "under development", "under-development",
+                    "under_construction", "underconstruction",
+                    "under_development", "underdevelopment",
                 ):
                     return "Under construction"
-                if v == "ready":
-                    return "Ready to move"
                 return None
 
             def _normalize_db_villa_type(value):
@@ -530,12 +535,14 @@ def register_properties_routes(app):
                 return None
 
             # Handle status / listing_type according to DB constraints
-            # DB status: new|sell|resell (residential/plot); sale|rent (commercial)
+            # residential: status IN ('new', 'sell', 'resale'); plot: status IN ('new', 'sale', 'resale'); commercial: sale|rent
             _status = (
                 _normalize_db_status(data.get("listing_type"))
                 or _normalize_db_status(data.get("status"))
                 or "sell"
             )
+            # Plot table uses 'sale' not 'sell'; map for plot insert only
+            _plot_status = "sale" if _status == "sell" else _status
             _listing_type = (
                 _normalize_db_listing_type(data.get("listing_type"))
                 or _normalize_db_listing_type(data.get("property_status"))
@@ -650,7 +657,7 @@ def register_properties_routes(app):
                     city, locality, project_name, plot_area, plot_length, plot_breadth,
                     price, data.get("price_text"), 
                     1 if data.get("price_negotiable") else 0,
-                    _status, _listing_type, _pstat, data.get("description"),
+                    _plot_status, _listing_type, _pstat, data.get("description"),
                     data.get("location_link"), data.get("directions"),
                     data.get("builder"), safe_float(data.get("total_acres"), None),
                     1 if data.get("is_featured") else 0,
@@ -707,8 +714,8 @@ def register_properties_routes(app):
                         type, villa_type, status, listing_type, property_status, description,
                         location_link, directions, length, breadth,
                         builder, configuration, total_flats, total_floors, total_acres,
-                        is_featured, is_active
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        is_featured, is_active, possession_date
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 
                 property_id = execute_insert(insert_query, (
@@ -725,7 +732,8 @@ def register_properties_routes(app):
                     safe_int(data.get("total_floors"), None),
                     safe_float(data.get("total_acres"), None),
                     1 if data.get("is_featured") else 0,
-                    1 if data.get("is_active", True) else 0
+                    1 if data.get("is_active", True) else 0,
+                    data.get("possession_date")
                 ))
                 
                 img_table = "residential_property_images"
@@ -889,7 +897,8 @@ def register_properties_routes(app):
                         NULL as plot_area, NULL as plot_length, NULL as plot_breadth,
                         NULL as project_name,
                         type as property_type,
-                        NULL as price_includes_registration
+                        NULL as price_includes_registration,
+                        possession_date
                     FROM residential_properties
                     WHERE id = %s
                 """
@@ -982,6 +991,16 @@ def register_properties_routes(app):
                     property_data['created_at'] = created_at_val.isoformat() if isinstance(created_at_val, datetime) else created_at_val
             if 'updated_at' in property_data and isinstance(property_data['updated_at'], datetime):
                 property_data['updated_at'] = property_data['updated_at'].isoformat()
+
+            # Residential: always include possession_date (same as other fields), serialize DATE to ISO string
+            if property_category == 'residential':
+                property_data.setdefault('possession_date', None)
+                pd = property_data.get('possession_date')
+                if pd is not None:
+                    if isinstance(pd, (datetime, date)):
+                        property_data['possession_date'] = pd.isoformat() if hasattr(pd, 'isoformat') else str(pd)
+                    elif not isinstance(pd, str):
+                        property_data['possession_date'] = str(pd)
 
             # Commercial: parse parking_options from JSON string if present
             if property_category == 'commercial' and property_data.get('parking_options') and isinstance(property_data['parking_options'], str):
@@ -1140,9 +1159,9 @@ def register_properties_routes(app):
                     return [_decimal_to_float(v) for v in obj]
                 return obj
             
-            # Convert datetime objects to ISO format strings for JSON serialization
+            # Convert datetime/date objects to ISO format strings for JSON serialization
             def _datetime_to_iso(obj):
-                if isinstance(obj, datetime):
+                if isinstance(obj, (datetime, date)):
                     return obj.isoformat()
                 if isinstance(obj, dict):
                     return {k: _datetime_to_iso(v) for k, v in obj.items()}
@@ -1193,7 +1212,7 @@ def register_properties_routes(app):
                 if v is None: return None
                 s = str(v).strip().lower()
                 if s in ("new",): return "new"
-                if s in ("resale", "resell"): return "resell"
+                if s in ("resale", "resell"): return "resale"
                 if s in ("sale", "sell", "rent"): return "sell"
                 return None
 
@@ -1214,6 +1233,7 @@ def register_properties_routes(app):
                 return None
 
             _status = _norm_status(data.get("listing_type")) or _norm_status(data.get("status")) or "sell"
+            _plot_status = "sale" if _status == "sell" else _status  # plot_properties uses 'sale' not 'sell'
             _listing = _norm_listing(data.get("listing_type")) or _norm_listing(data.get("property_status")) or "Ready to move"
             _pstat = data.get("property_status")
 
@@ -1263,6 +1283,7 @@ def register_properties_routes(app):
                 _add(sets, params, "total_flats", data.get("total_flats"), as_int=True)
                 _add(sets, params, "total_floors", data.get("total_floors"), as_int=True)
                 _add(sets, params, "total_acres", data.get("total_acres"), as_float=True)
+                _add(sets, params, "possession_date", data.get("possession_date"))
             elif cat == "commercial":
                 _add(sets, params, "city", data.get("city"))
                 _add(sets, params, "locality", data.get("locality"))
@@ -1306,6 +1327,7 @@ def register_properties_routes(app):
                 if "is_featured" in data: _add(sets, params, "is_featured", 1 if data.get("is_featured") else 0, as_int=True)
                 if "is_active" in data: _add(sets, params, "is_active", 1 if data.get("is_active", True) else 0, as_int=True)
             else:
+                # plot_properties: status must be 'new', 'sale', or 'resale' (not 'sell')
                 _add(sets, params, "city", data.get("city"))
                 _add(sets, params, "locality", data.get("locality"))
                 _add(sets, params, "project_name", data.get("project_name") or data.get("property_name"))
@@ -1315,8 +1337,9 @@ def register_properties_routes(app):
                 _add(sets, params, "price", data.get("price"), as_float=True)
                 _add(sets, params, "price_text", data.get("price_text"))
                 if "price_negotiable" in data: _add(sets, params, "price_negotiable", 1 if data.get("price_negotiable") else 0, as_int=True)
-                _add(sets, params, "status", _status)
-                if _status in ("sale", "rent"): _set_null(sets, params, "property_status")
+                _add(sets, params, "status", _plot_status)
+                _add(sets, params, "listing_type", _listing)
+                if _plot_status in ("sale", "rent"): _set_null(sets, params, "property_status")
                 else: _add(sets, params, "property_status", _pstat)
                 _add(sets, params, "description", data.get("description"))
                 if "is_featured" in data: _add(sets, params, "is_featured", 1 if data.get("is_featured") else 0, as_int=True)
