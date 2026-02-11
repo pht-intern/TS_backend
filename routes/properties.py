@@ -269,7 +269,7 @@ def register_properties_routes(app):
                     unit_type, bedrooms, bathrooms, buildup_area as area, buildup_area, carpet_area, 
                     super_built_up_area, price, price_text, price_negotiable,
                     type, status, property_status, description,
-                    location_link, directions, length, breadth,
+                    location_link, rera_number, rera_url, directions, length, breadth,
                     builder, configuration, total_flats, total_floors, total_acres,
                     is_featured, is_active, created_at, updated_at,
                     'residential' as property_category,
@@ -292,7 +292,7 @@ def register_properties_routes(app):
                         NULL as unit_type, 0 as bedrooms, 0 as bathrooms, plot_area as area, NULL as buildup_area, NULL as carpet_area,
                         NULL as super_built_up_area, price, price_text, price_negotiable,
                         'plot' as type, status, property_status, description,
-                        location_link, directions, NULL as length, NULL as breadth,
+                        location_link, rera_number, rera_url, directions, NULL as length, NULL as breadth,
                         builder, NULL as configuration, NULL as total_flats, NULL as total_floors, total_acres,
                         is_featured, is_active, created_at, updated_at,
                         'plot' as property_category,
@@ -315,7 +315,7 @@ def register_properties_routes(app):
                         COALESCE(super_built_up_area, 0) as area, NULL as buildup_area, carpet_area,
                         super_built_up_area, price, price_text, price_negotiable,
                         property_type as type, status, property_status, description,
-                        location_link, directions, NULL as length, NULL as breadth,
+                        location_link, rera_number, rera_url, directions, NULL as length, NULL as breadth,
                         NULL as builder, NULL as configuration, NULL as total_flats, total_floors, NULL as total_acres,
                         is_featured, is_active, created_at, updated_at,
                         'commercial' as property_category,
@@ -576,7 +576,7 @@ def register_properties_routes(app):
                 insert_commercial = """
                     INSERT INTO commercial_properties (
                         city, locality, property_name, property_type, price, price_text, price_negotiable,
-                        status, listing_type, property_status, description, location_link, directions,
+                        status, listing_type, property_status, description, location_link, rera_number, rera_url, directions,
                         super_built_up_area, carpet_area, plot_area,
                         total_floors, floor_number, total_seats_workstations, number_of_cabins,
                         number_of_parking_slots, parking_options,
@@ -586,7 +586,7 @@ def register_properties_routes(app):
                         number_of_shutters, shutter_height, shutter_height_unit, floor_load_capacity,
                         is_featured, is_active
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s,
@@ -597,7 +597,7 @@ def register_properties_routes(app):
                     city, locality, property_name, property_type, price, data.get("price_text"),
                     1 if data.get("price_negotiable") else 0,
                     _commercial_status, data.get("listing_type"), _pstat, data.get("description"),
-                    data.get("location_link"), data.get("directions"),
+                    data.get("location_link"), data.get("rera_number"), data.get("rera_url"), data.get("directions"),
                     safe_float(data.get("super_buildup_area"), None),
                     safe_float(data.get("carpet_area"), None),
                     safe_float(data.get("plot_area"), None),
@@ -648,9 +648,9 @@ def register_properties_routes(app):
                         city, locality, project_name, plot_area, plot_length, plot_breadth,
                         price, price_text, price_negotiable,
                         status, listing_type, property_status, description,
-                        location_link, directions, builder, total_acres,
+                        location_link, rera_number, rera_url, directions, builder, total_acres,
                         is_featured, is_active
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 
                 property_id = execute_insert(insert_query, (
@@ -658,7 +658,7 @@ def register_properties_routes(app):
                     price, data.get("price_text"), 
                     1 if data.get("price_negotiable") else 0,
                     _plot_status, _listing_type, _pstat, data.get("description"),
-                    data.get("location_link"), data.get("directions"),
+                    data.get("location_link"), data.get("rera_number"), data.get("rera_url"), data.get("directions"),
                     data.get("builder"), safe_float(data.get("total_acres"), None),
                     1 if data.get("is_featured") else 0,
                     1 if data.get("is_active", True) else 0
@@ -712,10 +712,10 @@ def register_properties_routes(app):
                         buildup_area, carpet_area, super_built_up_area,
                         price, price_text, price_negotiable,
                         type, villa_type, status, listing_type, property_status, description,
-                        location_link, directions, length, breadth,
+                        location_link, rera_number, rera_url, directions, length, breadth,
                         builder, configuration, total_flats, total_floors, total_acres,
                         is_featured, is_active, possession_date
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 
                 property_id = execute_insert(insert_query, (
@@ -724,7 +724,7 @@ def register_properties_routes(app):
                     price, data.get("price_text"),
                     1 if data.get("price_negotiable") else 0,
                     db_property_type, _villa_type, _status, _listing_type, _pstat, data.get("description"),
-                    data.get("location_link"), data.get("directions"),
+                    data.get("location_link"), data.get("rera_number"), data.get("rera_url"), data.get("directions"),
                     safe_float(data.get("length"), None),
                     safe_float(data.get("breadth"), None),
                     data.get("builder"), data.get("configuration"),
@@ -863,7 +863,7 @@ def register_properties_routes(app):
                         COALESCE(super_built_up_area, 0) as area, NULL as buildup_area, carpet_area,
                         super_built_up_area, price, price_text, price_negotiable,
                         property_type as type, status, property_status, description,
-                        location_link, directions, NULL as length, NULL as breadth,
+                        location_link, rera_number, rera_url, directions, NULL as length, NULL as breadth,
                         NULL as builder, NULL as configuration, NULL as total_flats, total_floors, NULL as total_acres,
                         is_featured, is_active, created_at, updated_at,
                         'commercial' as property_category,
@@ -890,7 +890,7 @@ def register_properties_routes(app):
                         unit_type, bedrooms, bathrooms, buildup_area as area, buildup_area, carpet_area, 
                         super_built_up_area, price, price_text, price_negotiable,
                         type, villa_type, status, listing_type, property_status, description,
-                        location_link, directions, length, breadth,
+                        location_link, rera_number, rera_url, directions, length, breadth,
                         builder, configuration, total_flats, total_floors, total_acres,
                         is_featured, is_active, created_at, updated_at,
                         'residential' as property_category,
@@ -913,7 +913,7 @@ def register_properties_routes(app):
                         NULL as unit_type, 0 as bedrooms, 0 as bathrooms, plot_area as area, NULL as buildup_area, NULL as carpet_area,
                         NULL as super_built_up_area, price, price_text, price_negotiable,
                         'plot' as type, status, property_status, description,
-                        location_link, directions, NULL as length, NULL as breadth,
+                        location_link, rera_number, rera_url, directions, NULL as length, NULL as breadth,
                         builder, NULL as configuration, NULL as total_flats, NULL as total_floors, total_acres,
                         is_featured, is_active, created_at, updated_at,
                         'plot' as property_category,
@@ -1275,6 +1275,8 @@ def register_properties_routes(app):
                 if "is_featured" in data: _add(sets, params, "is_featured", 1 if data.get("is_featured") else 0, as_int=True)
                 if "is_active" in data: _add(sets, params, "is_active", 1 if data.get("is_active", True) else 0, as_int=True)
                 _add(sets, params, "location_link", data.get("location_link"))
+                _add(sets, params, "rera_number", data.get("rera_number"))
+                _add(sets, params, "rera_url", data.get("rera_url"))
                 _add(sets, params, "directions", data.get("directions"))
                 _add(sets, params, "length", data.get("length"), as_float=True)
                 _add(sets, params, "breadth", data.get("breadth"), as_float=True)
@@ -1297,6 +1299,8 @@ def register_properties_routes(app):
                 _add(sets, params, "property_status", data.get("property_status"))
                 _add(sets, params, "description", data.get("description"))
                 _add(sets, params, "location_link", data.get("location_link"))
+                _add(sets, params, "rera_number", data.get("rera_number"))
+                _add(sets, params, "rera_url", data.get("rera_url"))
                 _add(sets, params, "directions", data.get("directions"))
                 _add(sets, params, "super_built_up_area", data.get("super_buildup_area"), as_float=True)
                 _add(sets, params, "carpet_area", data.get("carpet_area"), as_float=True)
@@ -1345,6 +1349,8 @@ def register_properties_routes(app):
                 if "is_featured" in data: _add(sets, params, "is_featured", 1 if data.get("is_featured") else 0, as_int=True)
                 if "is_active" in data: _add(sets, params, "is_active", 1 if data.get("is_active", True) else 0, as_int=True)
                 _add(sets, params, "location_link", data.get("location_link"))
+                _add(sets, params, "rera_number", data.get("rera_number"))
+                _add(sets, params, "rera_url", data.get("rera_url"))
                 _add(sets, params, "directions", data.get("directions"))
                 _add(sets, params, "builder", data.get("builder"))
                 _add(sets, params, "total_acres", data.get("total_acres"), as_float=True)
